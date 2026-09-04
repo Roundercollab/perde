@@ -10,10 +10,13 @@ const wss = new WebSocket.Server({ server });
 app.use(express.static(path.join(__dirname, "public")));
 
 const rooms = new Map();
+const MAX_ROOM_CODE_LEN = 30;
+const MAX_SOURCE_LEN = 2000;
 
 function getRoom(code) {
   if (!rooms.has(code)) {
     rooms.set(code, {
+      code,
       users: new Map(),
       state: null
     });
@@ -38,10 +41,24 @@ function send(ws, message) {
   }
 }
 
+// Odayı temizler: kullanıcı kalmadıysa Map'ten O(1) sürede kaldırır.
+function cleanupRoomIfEmpty(room) {
+  if (room && room.users.size === 0) {
+    rooms.delete(room.code);
+  }
+}
+
 wss.on("connection", (ws) => {
   let room = null;
   let clientId = null;
   let name = "Misafir";
+
+  // Heartbeat: sekmesi kapanmadan aniden kopan (wifi kesilmesi vb.)
+  // bağlantıları tespit edip odada hayalet kullanıcı bırakmamak için.
+  ws.isAlive = true;
+  ws.on("pong", () => {
+    ws.isAlive = true;
+  });
 
   ws.on("message", (raw) => {
     let message;
@@ -56,7 +73,8 @@ wss.on("connection", (ws) => {
     if (message.type === "join") {
       const code = String(message.room || "")
         .trim()
-        .toUpperCase();
+        .toUpperCase()
+        .slice(0, MAX_ROOM_CODE_LEN);
 
       if (!code) return;
 
@@ -87,8 +105,12 @@ wss.on("connection", (ws) => {
 
     // Video durumu değişti
     if (message.type === "state") {
+      const source = typeof message.source === "string"
+        ? message.source.slice(0, MAX_SOURCE_LEN)
+        : null;
+
       room.state = {
-        source: message.source,
+        source,
         playing: !!message.playing,
         time: Number(message.time) || 0,
         rate: Number(message.rate) || 1,
@@ -131,14 +153,24 @@ wss.on("connection", (ws) => {
       text: `${name} odadan ayrıldı.`
     });
 
-    if (room.users.size === 0) {
-      rooms.delete(
-        [...rooms.entries()].find(([, r]) => r === room)?.[0]
-      );
-    }
+    cleanupRoomIfEmpty(room);
   });
 });
 
-server.listen(3000, () => {
-  console.log("Perde çalışıyor: http://localhost:3000");
+// Ölü bağlantıları periyodik olarak tespit edip kapat (bkz. isAlive/pong).
+const heartbeat = setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) {
+      return ws.terminate();
+    }
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, 30000);
+
+wss.on("close", () => clearInterval(heartbeat));
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Perde çalışıyor: http://localhost:${PORT}`);
 });

@@ -1,0 +1,397 @@
+:root {
+  --void: #0e0c0b;
+  --panel: #1b1613;
+  --panel-raised: #241d19;
+  --curtain: #8c2f3b;
+  --curtain-bright: #a83c49;
+  --marquee: #e3a83b;
+  --text-hi: #f3eae0;
+  --text-mid: #b9aa9c;
+  --text-low: #7c6f63;
+  --line: #332a24;
+  --radius: 10px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--void);
+  color: var(--text-hi);
+  font-family: "Inter", system-ui, sans-serif;
+  display: flex;
+  flex-direction: column;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+}
+
+/* ---------- Marquee header ---------- */
+
+.marquee {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 24px;
+  background: linear-gradient(180deg, var(--curtain) 0%, #6f2530 100%);
+  border-bottom: 3px solid var(--marquee);
+  flex-wrap: wrap;
+}
+
+.wordmark {
+  font-family: "Bebas Neue", "Inter", sans-serif;
+  font-size: 34px;
+  letter-spacing: 2px;
+  color: var(--text-hi);
+  line-height: 1;
+}
+
+.marquee-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 13px;
+}
+
+.room-pill {
+  color: var(--text-hi);
+  background: rgba(0, 0, 0, 0.25);
+  padding: 5px 12px;
+  border-radius: 999px;
+}
+
+.room-pill strong {
+  color: var(--marquee);
+  letter-spacing: 0.5px;
+}
+
+.conn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-hi);
+}
+
+.conn-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-low);
+}
+
+.conn[data-state="connecting"] .conn-dot { background: var(--marquee); animation: pulse 1.1s infinite; }
+.conn[data-state="online"] .conn-dot { background: #6fbf73; }
+.conn[data-state="offline"] .conn-dot { background: #c85a4a; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* ---------- Stage ---------- */
+
+.stage-area {
+  flex: 1;
+  display: flex;
+  padding: 20px 24px 28px;
+  justify-content: center;
+}
+
+.video-column {
+  width: 100%;
+  max-width: 1180px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.url-bar {
+  display: flex;
+  gap: 8px;
+}
+
+.url-bar input {
+  flex: 1;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--text-hi);
+  font-size: 14px;
+}
+
+.url-bar input::placeholder { color: var(--text-low); }
+
+.url-bar input:focus,
+.chat-input-row input:focus,
+.join-field input:focus {
+  outline: 2px solid var(--marquee);
+  outline-offset: 1px;
+}
+
+.url-bar button,
+.chat-input-row button,
+.join-card button {
+  padding: 10px 18px;
+  background: var(--curtain);
+  color: var(--text-hi);
+  border: none;
+  border-radius: var(--radius);
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.url-bar button:hover,
+.chat-input-row button:hover,
+.join-card button:hover {
+  background: var(--curtain-bright);
+}
+
+/* The "theatre" is the fullscreen target: video + overlay chat live inside it */
+.theatre {
+  position: relative;
+  background: #000;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 6px var(--panel);
+  aspect-ratio: 16 / 9;
+  display: flex;
+}
+
+#video-player {
+  width: 100%;
+  height: 100%;
+  background: #000;
+  display: block;
+}
+
+.empty-screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 0 40px;
+  color: var(--text-mid);
+  pointer-events: none;
+}
+
+.empty-screen p { margin: 4px 0; }
+.empty-screen-sub { font-size: 13px; color: var(--text-low); max-width: 380px; }
+.theatre.has-video .empty-screen { display: none; }
+
+.fs-btn {
+  position: absolute;
+  bottom: 14px;
+  right: 14px;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: none;
+  background: rgba(14, 12, 11, 0.6);
+  color: var(--text-hi);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 5;
+}
+
+.fs-btn:hover { background: rgba(140, 47, 59, 0.85); }
+
+/* ---------- Chat panel (docked normally, overlay in fullscreen) ---------- */
+
+.chat-panel {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  bottom: 12px;
+  width: 300px;
+  max-width: 40vw;
+  background: rgba(27, 22, 19, 0.88);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  backdrop-filter: blur(2px);
+  z-index: 4;
+}
+
+.chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-mid);
+  border-bottom: 1px solid var(--line);
+}
+
+.chat-toggle {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: none;
+  background: var(--panel-raised);
+  color: var(--text-hi);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.chat-box {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13.5px;
+}
+
+.msg { max-width: 88%; line-height: 1.35; }
+.msg .msg-name { font-size: 11px; color: var(--text-low); margin-bottom: 2px; }
+.msg .msg-text {
+  background: var(--panel-raised);
+  padding: 6px 10px;
+  border-radius: 10px 10px 10px 3px;
+  display: inline-block;
+  color: var(--text-hi);
+}
+
+.msg.own { align-self: flex-end; text-align: right; }
+.msg.own .msg-text { background: var(--curtain); border-radius: 10px 10px 3px 10px; }
+
+.msg.system {
+  align-self: center;
+  color: var(--text-low);
+  font-size: 12px;
+  font-style: italic;
+}
+
+.chat-input-row {
+  display: flex;
+  gap: 6px;
+  padding: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.chat-input-row input {
+  flex: 1;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text-hi);
+  font-size: 13.5px;
+  min-width: 0;
+}
+
+.chat-input-row button { padding: 8px 14px; font-size: 13px; }
+
+/* Collapsed state — header only, works both docked and overlay */
+.chat-panel.collapsed .chat-box,
+.chat-panel.collapsed .chat-input-row {
+  display: none;
+}
+.chat-panel.collapsed { bottom: auto; }
+
+/* ---------- Fullscreen: theatre fills the viewport, chat becomes a small overlay ---------- */
+
+.theatre:fullscreen,
+.theatre:-webkit-full-screen {
+  border-radius: 0;
+  aspect-ratio: auto;
+  box-shadow: none;
+}
+
+.theatre:fullscreen .chat-panel,
+.theatre:-webkit-full-screen .chat-panel {
+  top: auto;
+  left: auto;
+  bottom: 24px;
+  right: 24px;
+  width: 320px;
+  height: 46vh;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+}
+
+.theatre:fullscreen .chat-panel.collapsed,
+.theatre:-webkit-full-screen .chat-panel.collapsed {
+  height: auto;
+}
+
+/* ---------- Join modal (replaces window.prompt) ---------- */
+
+.join-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 5, 4, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 20px;
+}
+
+.join-overlay[hidden] { display: none; }
+
+.join-card {
+  width: 100%;
+  max-width: 340px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 28px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.join-wordmark {
+  font-family: "Bebas Neue", sans-serif;
+  font-size: 30px;
+  letter-spacing: 2px;
+  color: var(--marquee);
+}
+
+.join-sub { color: var(--text-mid); font-size: 13.5px; margin: -6px 0 4px; }
+
+.join-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12.5px;
+  color: var(--text-mid);
+}
+
+.join-field input {
+  padding: 10px 12px;
+  background: var(--void);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text-hi);
+  font-size: 14px;
+}
+
+.join-hint { font-size: 12px; color: var(--text-low); margin: -6px 0 2px; }
+
+/* ---------- Small screens ---------- */
+
+@media (max-width: 760px) {
+  .stage-area { padding: 14px; }
+  .chat-panel { width: 82vw; max-width: none; }
+  .wordmark { font-size: 26px; }
+}
