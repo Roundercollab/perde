@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Perde — Birlikte İzle</title>
+
+<style>
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #0b1120;
+  color: #f5f1e8;
+  font-family: Arial, sans-serif;
+}
+
+header {
+  text-align: center;
+  padding: 25px;
+}
+
+main {
+  max-width: 1100px;
+  margin: auto;
+  padding: 20px;
+}
+
+input, button {
+  padding: 11px;
+  border-radius: 7px;
+  border: 1px solid #26314d;
+  background: #141c2f;
+  color: white;
+}
+
+button {
+  cursor: pointer;
+  background: #f2b134;
+  color: #211605;
+  font-weight: bold;
+}
+
+.join {
+  max-width: 400px;
+  margin: 30px auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.room {
+  display: none;
+  gap: 20px;
+}
+
+.room.active {
+  display: flex;
+}
+
+.main {
+  flex: 1;
+}
+
+.side {
+  width: 300px;
+}
+
+.player {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: black;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+video, iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.controls {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.controls input {
+  flex: 1;
+}
+
+.chat {
+  background: #141c2f;
+  border-radius: 10px;
+  padding: 15px;
+}
+
+#messages {
+  height: 300px;
+  overflow-y: auto;
+  margin-bottom: 10px;
+}
+
+.message {
+  margin-bottom: 8px;
+}
+
+.system {
+  color: #8b93a8;
+  font-style: italic;
+}
+
+@media(max-width: 800px) {
+  .room {
+    flex-direction: column;
+  }
+
+  .side {
+    width: 100%;
+  }
+}
+</style>
+</head>
+
+<body>
+
+<header>
+  <h1>Perde</h1>
+  <p>Birlikte izle.</p>
+</header>
+
+<main>
+
+<div class="join" id="joinScreen">
+  <input id="name" placeholder="Adın">
+  <input id="room" placeholder="Oda kodu">
+  <button onclick="joinRoom()">Odaya gir</button>
+</div>
+
+<div class="room" id="roomScreen">
+
+  <div class="main">
+
+    <h3>Oda: <span id="roomLabel"></span></h3>
+
+    <div class="player">
+      <video id="video" controls></video>
+      <iframe id="youtube" style="display:none"
+        allow="autoplay; fullscreen"></iframe>
+    </div>
+
+    <div class="controls">
+      <input id="url" placeholder="Video URL'si veya YouTube linki">
+      <button onclick="loadVideo()">Yükle</button>
+    </div>
+
+    <p id="status">Bağlanıyor...</p>
+
+  </div>
+
+  <div class="side">
+
+    <div class="chat">
+      <h3>Sohbet</h3>
+
+      <div id="messages"></div>
+
+      <input id="chatInput" placeholder="Mesaj yaz...">
+      <button onclick="sendChat()">Gönder</button>
+    </div>
+
+  </div>
+
+</div>
+
+</main>
+
+<script src="https://www.youtube.com/iframe_api"></script>
+
+<script>
+const ws = new WebSocket(
+  location.protocol === "https:"
+    ? "wss://" + location.host
+    : "ws://" + location.host
+);
+
+let room = null;
+let name = "Misafir";
+let clientId = Math.random().toString(36).slice(2);
+let currentSource = null;
+let applyingRemote = false;
+let lastRemoteState = null;
+let ytPlayer = null;
+let ytReady = false;
+
+const video = document.getElementById("video");
+const youtube = document.getElementById("youtube");
+
+function send(data) {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(data));
+  }
+}
+
+function joinRoom() {
+  name = document.getElementById("name").value || "Misafir";
+  room = document.getElementById("room").value.trim().toUpperCase();
+
+  if (!room) return;
+
+  document.getElementById("joinScreen").style.display = "none";
+  document.getElementById("roomScreen").classList.add("active");
+  document.getElementById("roomLabel").textContent = room;
+
+  send({
+    type: "join",
+    room,
+    name,
+    clientId
+  });
+}
+
+function extractYouTubeId(url) {
+  const patterns = [
+    /youtu\.be\/([A-Za-z0-9_-]{11})/,
+    /youtube\.com\/watch\?v=([A-Za-z0-9_-]{11})/,
+    /youtube\.com\/embed\/([A-Za-z0-9_-]{11})/,
+    /youtube\.com\/shorts\/([A-Za-z0-9_-]{11})/
+  ];
+
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) return match[1];
+  }
+
+  return null;
+}
+
+function loadVideo() {
+  const url = document.getElementById("url").value.trim();
+
+  if (!url) return;
+
+  const ytId = extractYouTubeId(url);
+
+  if (ytId) {
+    currentSource = {
+      type: "youtube",
+      id: ytId
+    };
+
+    youtube.style.display = "block";
+    video.style.display = "none";
+
+    youtube.src =
+      "https://www.youtube.com/embed/" +
+      ytId +
+      "?enablejsapi=1&autoplay=1";
+
+    sendState(true, 0);
+    return;
+  }
+
+  currentSource = {
+    type: "video",
+    url
+  };
+
+  youtube.style.display = "none";
+  video.style.display = "block";
+
+  video.src = url;
+  video.play().catch(() => {});
+
+  sendState(true, 0);
+}
+
+function sendState(playing, time) {
+  if (!currentSource) return;
+
+  send({
+    type: "state",
+    source: currentSource,
+    playing,
+    time,
+    rate: 1
+  });
+}
+
+video.addEventListener("play", () => {
+  if (!applyingRemote) {
+    sendState(true, video.currentTime);
+  }
+});
+
+video.addEventListener("pause", () => {
+  if (!applyingRemote) {
+    sendState(false, video.currentTime);
+  }
+});
+
+video.addEventListener("seeked", () => {
+  if (!applyingRemote) {
+    sendState(!video.paused, video.currentTime);
+  }
+});
+
+window.onYouTubeIframeAPIReady = function() {
+  ytPlayer = new YT.Player("youtube", {
+    events: {
+      onReady: () => {
+        ytReady = true;
+      }
+    }
+  });
+};
+
+function applyRemoteState(state) {
+  if (!state || !state.source) return;
+
+  lastRemoteState = state;
+
+  applyingRemote = true;
+
+  const expectedTime =
+    state.time +
+    (state.playing
+      ? (Date.now() - state.updatedAt) / 1000
+      : 0);
+
+  if (
+    !currentSource ||
+    JSON.stringify(currentSource) !== JSON.stringify(state.source)
+  ) {
+    currentSource = state.source;
+
+    if (state.source.type === "youtube") {
+      youtube.style.display = "block";
+      video.style.display = "none";
+
+      youtube.src =
+        "https://www.youtube.com/embed/" +
+        state.source.id +
+        "?enablejsapi=1&autoplay=" +
+        (state.playing ? "1" : "0");
+    } else {
+      youtube.style.display = "none";
+      video.style.display = "block";
+
+      video.src = state.source.url;
+    }
+  }
+
+  if (state.source.type === "video") {
+    if (Math.abs(video.currentTime - expectedTime) > 1) {
+      video.currentTime = expectedTime;
+    }
+
+    if (state.playing) {
+      video.play().catch(() => {});
+    } else {
+      video.pause();
+    }
+  }
+
+  setTimeout(() => {
+    applyingRemote = false;
+  }, 300);
+}
+
+ws.onopen = () => {
+  document.getElementById("status").textContent = "Bağlandı";
+};
+
+ws.onmessage = (event) => {
+  const message = JSON.parse(event.data);
+
+  if (message.type === "joined") {
+    if (message.state) {
+      applyRemoteState(message.state);
+    }
+  }
+
+  if (message.type === "state") {
+    applyRemoteState(message.state);
+  }
+
+  if (message.type === "chat") {
+    addMessage(message.name, message.text);
+  }
+
+  if (message.type === "system") {
+    addSystemMessage(message.text);
+  }
+};
+
+function addMessage(who, text) {
+  const div = document.createElement("div");
+  div.className = "message";
+
+  const bold = document.createElement("b");
+  bold.textContent = who + ": ";
+
+  div.appendChild(bold);
+  div.appendChild(document.createTextNode(text));
+
+  document.getElementById("messages").appendChild(div);
+}
+
+function addSystemMessage(text) {
+  const div = document.createElement("div");
+  div.className = "message system";
+  div.textContent = text;
+
+  document.getElementById("messages").appendChild(div);
+}
+
+function sendChat() {
+  const input = document.getElementById("chatInput");
+  const text = input.value.trim();
+
+  if (!text) return;
+
+  send({
+    type: "chat",
+    text
+  });
+
+  input.value = "";
+}
+
+// Her 5 saniyede senkronizasyon heartbeat'i
+setInterval(() => {
+  if (!currentSource || applyingRemote) return;
+
+  if (currentSource.type === "video" && !video.paused) {
+    sendState(true, video.currentTime);
+  }
+}, 5000);
+</script>
+
+</body>
+</html>
