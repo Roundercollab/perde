@@ -138,8 +138,8 @@ wss.on("connection", (ws) => {
     }
 
     // Oynatma aksiyonu bildirimi (ör. "X 5sn ileri sardı") — sohbete
-    // sistem mesajı olarak düşer, bu yüzden client tarafında ayrı bir
-    // mesaj tipi işlemeye gerek yok.
+    // sistem mesajı olarak düşer. Herkese (aksiyonu yapan kişi dahil)
+    // gönderiliyor ki kendi yaptığın değişikliği de sohbette görebilesin.
     if (message.type === "action") {
       const text = String(message.text || "").slice(0, MAX_ACTION_LEN);
       if (!text) return;
@@ -147,7 +147,7 @@ wss.on("connection", (ws) => {
       broadcast(room, {
         type: "system",
         text: `${name} ${text}`
-      }, ws);
+      });
 
       return;
     }

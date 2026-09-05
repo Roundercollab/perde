@@ -516,14 +516,18 @@ body {
   font-size: 13.5px;
 }
 
-.msg { max-width: 88%; line-height: 1.35; }
+.msg { max-width: 88%; line-height: 1.35; min-width: 0; }
 .msg .msg-name { font-size: 11px; color: var(--text-low); margin-bottom: 2px; }
 .msg .msg-text {
   background: var(--panel-raised);
   padding: 6px 10px;
   border-radius: 10px 10px 10px 3px;
   display: inline-block;
+  max-width: 100%;
   color: var(--text-hi);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .msg.own { align-self: flex-end; text-align: right; }

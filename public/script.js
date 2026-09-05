@@ -446,29 +446,74 @@ chatResizeHandle.addEventListener("pointercancel", endChatResize);
 // yol açıyordu. Aşağıdaki dinleyiciler bunu yakalayıp otomatik olarak
 // doğru elemanı (theatre) tam ekrana alıyor, kimin tetiklediğinden
 // bağımsız olarak herkeste aynı düzen çalışsın diye.
+//
+// NOT: Firefox `controlsList="nofullscreen"` özelliğini desteklemiyor
+// (bu sadece Chromium tabanlı tarayıcılarda çalışan standart-dışı bir
+// özellik), bu yüzden Firefox'ta videonun kendi native tam ekran ikonu
+// hâlâ görünür durumda. Ayrıca Firefox, bir fullscreen isteğinden hemen
+// sonra (kullanıcı tıklamasından kopmuş, ör. bir .then() içinde) yapılan
+// İKİNCİ bir fullscreen isteğini genelde reddeder ("transient activation"
+// kuralı) — bu yüzden exit + tekrar-fullscreen zincirini tek adımda,
+// mümkünse exit'e hiç gerek kalmadan yapıyoruz ve her hatayı görünür
+// kılıyoruz (önceden sessizce başarısız oluyordu).
+
+function requestFullscreenOn(el) {
+  const fn = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen;
+  if (!fn) {
+    appendMessage({ system: true, text: "Bu tarayıcı tam ekranı desteklemiyor." });
+    return Promise.reject(new Error("no fullscreen API"));
+  }
+  return Promise.resolve(fn.call(el)).catch((err) => {
+    appendMessage({ system: true, text: "Tam ekran açılamadı: " + (err?.message || "tarayıcı reddetti") + ". Lütfen tam ekran butonuna tekrar basmayı deneyin." });
+    throw err;
+  });
+}
+
+function exitFullscreenNow() {
+  const fn = document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen;
+  return fn ? Promise.resolve(fn.call(document)).catch(() => {}) : Promise.resolve();
+}
+
+function currentFullscreenElement() {
+  return document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || null;
+}
 
 function goFullscreenOnTheatre() {
-  (theatre.requestFullscreen || theatre.webkitRequestFullscreen)?.call(theatre);
+  return requestFullscreenOn(theatre);
 }
 
 fullscreenBtn.addEventListener("click", () => {
-  if (document.fullscreenElement || document.webkitFullscreenElement) {
-    (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+  if (currentFullscreenElement()) {
+    exitFullscreenNow();
   } else {
     goFullscreenOnTheatre();
   }
 });
 
+let redirectingFullscreen = false;
+
 function redirectNativeVideoFullscreen() {
-  const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
-  if (fsEl === videoPlayer) {
-    const exit = document.exitFullscreen || document.webkitExitFullscreen;
-    Promise.resolve(exit?.call(document)).catch(() => {}).then(goFullscreenOnTheatre);
+  const fsEl = currentFullscreenElement();
+
+  if (fsEl === videoPlayer && !redirectingFullscreen) {
+    redirectingFullscreen = true;
+
+    // Önce exit etmeden, video zaten fullscreen'deyken doğrudan theatre'ı
+    // isteyerek deniyoruz — bu, kullanıcı tıklamasıyla aynı olay zincirine
+    // daha yakın kaldığı için Firefox'ta exit+then'e göre daha güvenilir.
+    goFullscreenOnTheatre()
+      .catch(() => exitFullscreenNow().then(() => goFullscreenOnTheatre()).catch(() => {}))
+      .finally(() => { redirectingFullscreen = false; });
   }
 }
 
 document.addEventListener("fullscreenchange", redirectNativeVideoFullscreen);
 document.addEventListener("webkitfullscreenchange", redirectNativeVideoFullscreen);
+document.addEventListener("mozfullscreenchange", redirectNativeVideoFullscreen);
+
+document.addEventListener("fullscreenerror", () => {
+  appendMessage({ system: true, text: "Tam ekran isteği tarayıcı tarafından reddedildi." });
+});
 
 // iOS Safari, videoyu standart Fullscreen API yerine kendi native tam ekran
 // oynatıcısına açar (webkitbeginfullscreen). Bunu da yakalayıp theatre'a
@@ -515,6 +560,14 @@ const remoteAudioEls = new Map();  // clientId -> <audio>
 const voicePeerNames = new Map();  // clientId -> name
 const mutedPeers = new Set();      // clientId'ler — sadece bizim tarafımızda sessize alınmış
 const pendingCandidates = new Map(); // clientId -> ICE aday kuyruğu (remote description gelmeden önce)
+const disconnectTimers = new Map();  // clientId -> "disconnected" durumundan toparlanma bekleme zamanlayıcısı
+const relayRetried = new Set();      // clientId'ler — relay-only ile zaten bir kez yeniden denendi mi
+
+// İki taraf da bağlantıyı aynı anda yeniden kurmaya çalışıp çakışmasın diye
+// basit bir "kimin başlatacağı" kuralı: clientId'si küçük olan taraf başlatır.
+function shouldInitiateTo(peerId) {
+  return myClientId < peerId;
+}
 
 function setMicState(state) {
   micState = state;
@@ -580,8 +633,12 @@ function togglePeerMute(id) {
   renderVoiceRoster();
 }
 
-function createPeerConnection(peerId) {
-  const pc = new RTCPeerConnection(RTC_CONFIG);
+function createPeerConnection(peerId, forceRelay = false) {
+  const config = forceRelay
+    ? { iceServers: RTC_CONFIG.iceServers, iceTransportPolicy: "relay" }
+    : RTC_CONFIG;
+
+  const pc = new RTCPeerConnection(config);
 
   if (localStream) {
     localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
@@ -598,15 +655,57 @@ function createPeerConnection(peerId) {
     if (!audioEl) {
       audioEl = document.createElement("audio");
       audioEl.autoplay = true;
+      audioEl.playsInline = true;
       audioEl.muted = mutedPeers.has(peerId);
       voiceAudioLayer.appendChild(audioEl);
       remoteAudioEls.set(peerId, audioEl);
     }
     audioEl.srcObject = e.streams[0];
+
+    // Bazı tarayıcılar (özellikle Chrome) kullanıcı etkileşimi olmadan
+    // programatik olarak eklenen sesi otomatik oynatmayı engelleyebiliyor.
+    // Bu durumda sessizce başarısız olmasın, kullanıcıyı uyaralım ve bir
+    // sonraki tıklamada tekrar deneyelim.
+    const tryPlay = () => audioEl.play().catch(() => {
+      appendMessage({ system: true, text: "Tarayıcı sesi otomatik oynatmayı engelledi — sayfaya bir kez tıklayın." });
+      const retryOnce = () => { audioEl.play().catch(() => {}); document.removeEventListener("click", retryOnce); };
+      document.addEventListener("click", retryOnce, { once: true });
+    });
+    tryPlay();
   };
 
   pc.onconnectionstatechange = () => {
-    if (["failed", "closed", "disconnected"].includes(pc.connectionState)) {
+    const state = pc.connectionState;
+
+    if (state === "connected") {
+      clearTimeout(disconnectTimers.get(peerId));
+      disconnectTimers.delete(peerId);
+      relayRetried.delete(peerId); // başarıyla bağlandı, retry sayacını sıfırla
+      return;
+    }
+
+    if (state === "failed") {
+      handleConnectionTrouble(peerId);
+      return;
+    }
+
+    if (state === "disconnected") {
+      // "disconnected" genelde geçici bir ağ tıkanıklığıdır ve kendiliğinden
+      // toparlanabilir — hemen kapatmak yerine birkaç saniye bekleyip hâlâ
+      // toparlanmadıysa sorunlu kabul ediyoruz.
+      if (!disconnectTimers.has(peerId)) {
+        const timer = setTimeout(() => {
+          disconnectTimers.delete(peerId);
+          if (peerConnections.get(peerId) === pc && pc.connectionState !== "connected") {
+            handleConnectionTrouble(peerId);
+          }
+        }, 6000);
+        disconnectTimers.set(peerId, timer);
+      }
+      return;
+    }
+
+    if (state === "closed") {
       closePeerConnection(peerId);
     }
   };
@@ -615,12 +714,37 @@ function createPeerConnection(peerId) {
   return pc;
 }
 
+// Bağlantı kurulamadığında/koptuğunda bir kez TURN relay'e zorlayarak
+// yeniden denenir (birçok "ses hiç gitmiyor" durumu doğrudan P2P bağlantı
+// kurulamamasından kaynaklanır — relay'e zorlamak bunu genelde çözer).
+function handleConnectionTrouble(peerId) {
+  const alreadyVoiceConnected = voicePeerNames.has(peerId);
+  closePeerConnection(peerId);
+
+  if (!alreadyVoiceConnected || !localStream) return;
+
+  if (relayRetried.has(peerId)) {
+    appendMessage({ system: true, text: "Sesli bağlantı kurulamadı (ağ/firewall engeli olabilir)." });
+    return;
+  }
+  relayRetried.add(peerId);
+
+  if (shouldInitiateTo(peerId)) {
+    callPeer(peerId, true);
+  }
+  // Diğer taraf yeni offer'ı bekleyecek (createPeerConnection offer geldiğinde otomatik kurulur).
+}
+
 function closePeerConnection(peerId) {
   const pc = peerConnections.get(peerId);
   if (pc) {
+    pc.onconnectionstatechange = null;
     pc.close();
     peerConnections.delete(peerId);
   }
+
+  clearTimeout(disconnectTimers.get(peerId));
+  disconnectTimers.delete(peerId);
 
   const audioEl = remoteAudioEls.get(peerId);
   if (audioEl) {
@@ -631,6 +755,7 @@ function closePeerConnection(peerId) {
 
   mutedPeers.delete(peerId);
   pendingCandidates.delete(peerId);
+  relayRetried.delete(peerId);
 }
 
 function sendSignal(toId, data) {
@@ -638,8 +763,8 @@ function sendSignal(toId, data) {
   ws.send(JSON.stringify({ type: "signal", to: toId, data }));
 }
 
-async function callPeer(peerId) {
-  const pc = createPeerConnection(peerId);
+async function callPeer(peerId, forceRelay = false) {
+  const pc = createPeerConnection(peerId, forceRelay);
   try {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
@@ -724,6 +849,26 @@ function teardownAllVoicePeers() {
   renderVoiceRoster();
 }
 
+function micErrorMessage(err) {
+  const name = err && err.name;
+  if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+    return "Mikrofon izni reddedildi. Tarayıcının adres çubuğundaki kilit/site ayarları simgesinden mikrofona izin verip tekrar deneyin.";
+  }
+  if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+    return "Mikrofon bulunamadı. Bir mikrofonun takılı/etkin olduğundan emin olun.";
+  }
+  if (name === "NotReadableError" || name === "TrackStartError") {
+    return "Mikrofona ulaşılamıyor — muhtemelen başka bir uygulama (Zoom, Discord, Teams vb.) kullanıyor.";
+  }
+  if (name === "SecurityError") {
+    return "Güvenlik kısıtlaması: site HTTPS (veya localhost) üzerinden açılmalı, mikrofon aksi halde çalışmaz.";
+  }
+  if (!window.isSecureContext) {
+    return "Bu sayfa güvenli bağlamda (HTTPS) açılmadığı için tarayıcı mikrofona izin vermiyor.";
+  }
+  return `Mikrofon hatası: ${name || "bilinmeyen hata"}.`;
+}
+
 async function enableMic() {
   setMicState("connecting");
 
@@ -731,7 +876,8 @@ async function enableMic() {
     localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (err) {
     setMicState("error");
-    setTimeout(() => setMicState("off"), 2000);
+    appendMessage({ system: true, text: micErrorMessage(err) });
+    setTimeout(() => setMicState("off"), 2500);
     return;
   }
 
@@ -742,6 +888,7 @@ async function enableMic() {
   isTalking = false;
 
   setMicState("on");
+  appendMessage({ system: true, text: `Sesli sohbete bağlandın. Konuşmak için "${friendlyKeyName(pttKey)}" tuşunu veya bas-konuş düğmesini basılı tut.` });
 
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: "voice-join" }));
