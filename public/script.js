@@ -8,6 +8,10 @@ const sendChatBtn = document.getElementById("send-chat");
 const chatToggleBtn = document.getElementById("chat-toggle");
 const chatPanel = document.getElementById("chat-panel");
 const fullscreenBtn = document.getElementById("fullscreen-btn");
+const seekBackBtn = document.getElementById("seek-back-btn");
+const seekFwdBtn = document.getElementById("seek-fwd-btn");
+const emoteFlyLayer = document.getElementById("emote-fly-layer");
+const emoteBar = document.getElementById("emote-bar");
 const connIndicator = document.getElementById("conn-indicator");
 const roomPill = document.getElementById("room-pill");
 const roomPillCode = document.getElementById("room-pill-code");
@@ -22,6 +26,8 @@ let userName = "Misafir";
 let isRemoteUpdate = false; // Kendi tetiklediğimiz olayların döngüye girmesini engeller
 let remoteUpdateResetTimer = null;
 let reconnectTimer = null;
+let lastPlaybackTime = 0; // Sarma miktarını hesaplamak için son bilinen zaman
+let seekStartTime = null; // Bir sarma işlemi başladığındaki zaman
 
 // ---------- Odaya giriş (native prompt() yerine temalı modal) ----------
 
@@ -89,7 +95,16 @@ function connectSocket() {
     if (data.type === "system") {
       appendMessage({ system: true, text: data.text });
     }
+
+    if (data.type === "emote") {
+      spawnEmote(data.emoji);
+    }
   };
+}
+
+function sendAction(text) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: "action", text }));
 }
 
 // ---------- Video senkronizasyonu ----------
@@ -147,10 +162,60 @@ function sendState() {
   }));
 }
 
-videoPlayer.addEventListener("play", sendState);
-videoPlayer.addEventListener("pause", sendState);
-videoPlayer.addEventListener("seeked", sendState);
-videoPlayer.addEventListener("ratechange", sendState);
+// Zamanı sürekli takip ediyoruz ki bir sarma (seek) başladığında
+// öncesindeki zamanı bilip kaç saniye sarıldığını hesaplayabilelim.
+videoPlayer.addEventListener("timeupdate", () => {
+  if (!videoPlayer.seeking) {
+    lastPlaybackTime = videoPlayer.currentTime;
+  }
+});
+
+videoPlayer.addEventListener("seeking", () => {
+  if (isRemoteUpdate) return;
+  if (seekStartTime === null) {
+    seekStartTime = lastPlaybackTime;
+  }
+});
+
+videoPlayer.addEventListener("play", () => {
+  sendState();
+  if (!isRemoteUpdate) sendAction("videoyu oynattı");
+});
+
+videoPlayer.addEventListener("pause", () => {
+  sendState();
+  if (!isRemoteUpdate) sendAction("videoyu durdurdu");
+});
+
+videoPlayer.addEventListener("seeked", () => {
+  sendState();
+
+  if (!isRemoteUpdate && seekStartTime !== null) {
+    const delta = videoPlayer.currentTime - seekStartTime;
+    if (Math.abs(delta) >= 0.75) {
+      const secs = Math.round(Math.abs(delta));
+      sendAction(delta > 0 ? `${secs}sn ileri sardı` : `${secs}sn geri sardı`);
+    }
+  }
+
+  seekStartTime = null;
+});
+
+videoPlayer.addEventListener("ratechange", () => {
+  sendState();
+  if (!isRemoteUpdate) sendAction(`hızı ${videoPlayer.playbackRate}x yaptı`);
+});
+
+seekBackBtn.addEventListener("click", () => {
+  if (!videoPlayer.src) return;
+  videoPlayer.currentTime = Math.max(0, videoPlayer.currentTime - 5);
+});
+
+seekFwdBtn.addEventListener("click", () => {
+  if (!videoPlayer.src) return;
+  const max = isFinite(videoPlayer.duration) ? videoPlayer.duration : Infinity;
+  videoPlayer.currentTime = Math.min(max, videoPlayer.currentTime + 5);
+});
 
 loadVideoBtn.addEventListener("click", () => {
   const url = videoUrlInput.value.trim();
@@ -214,7 +279,35 @@ chatToggleBtn.addEventListener("click", () => {
   chatToggleBtn.setAttribute("aria-label", collapsed ? "Sohbeti büyüt" : "Sohbeti küçült");
 });
 
-// ---------- Tam ekran: video büyür, sohbet küçük bir overlay olarak üstünde kalır ----------
+// ---------- Emote bar: sağ alttan uçan küçük emojiler ----------
+
+function spawnEmote(emoji) {
+  const el = document.createElement("span");
+  el.className = "flying-emote";
+  el.textContent = emoji;
+
+  const drift = Math.round((Math.random() - 0.5) * 70); // hafif yatay sapma
+  el.style.setProperty("--drift", drift + "px");
+  el.style.right = (16 + Math.random() * 40) + "px";
+
+  emoteFlyLayer.appendChild(el);
+  el.addEventListener("animationend", () => el.remove());
+}
+
+emoteBar.addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-emoji]");
+  if (!btn) return;
+
+  const emoji = btn.dataset.emoji;
+  spawnEmote(emoji);
+
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "emote", emoji }));
+  }
+});
+
+// ---------- Tam ekran: theatre tam ekran olur; CSS'te video ve sohbet
+// artık üst üste değil, yan yana (flex) gösteriliyor ----------
 
 fullscreenBtn.addEventListener("click", () => {
   if (document.fullscreenElement) {

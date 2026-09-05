@@ -12,6 +12,8 @@ app.use(express.static(path.join(__dirname, "public")));
 const rooms = new Map();
 const MAX_ROOM_CODE_LEN = 30;
 const MAX_SOURCE_LEN = 2000;
+const MAX_ACTION_LEN = 100;
+const MAX_EMOJI_LEN = 8;
 
 function getRoom(code) {
   if (!rooms.has(code)) {
@@ -121,6 +123,34 @@ wss.on("connection", (ws) => {
       broadcast(room, {
         type: "state",
         state: room.state
+      }, ws);
+
+      return;
+    }
+
+    // Oynatma aksiyonu bildirimi (ör. "X 5sn ileri sardı") — sohbete
+    // sistem mesajı olarak düşer, bu yüzden client tarafında ayrı bir
+    // mesaj tipi işlemeye gerek yok.
+    if (message.type === "action") {
+      const text = String(message.text || "").slice(0, MAX_ACTION_LEN);
+      if (!text) return;
+
+      broadcast(room, {
+        type: "system",
+        text: `${name} ${text}`
+      }, ws);
+
+      return;
+    }
+
+    // Emote: küçük bir emoji, odadaki diğer herkesin ekranında uçuşsun
+    if (message.type === "emote") {
+      const emoji = String(message.emoji || "").slice(0, MAX_EMOJI_LEN);
+      if (!emoji) return;
+
+      broadcast(room, {
+        type: "emote",
+        emoji
       }, ws);
 
       return;

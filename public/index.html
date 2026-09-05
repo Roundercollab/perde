@@ -25,22 +25,37 @@
   <main class="stage-area">
     <div class="video-column">
       <div class="url-bar">
-        <input type="text" id="video-url" placeholder="Direkt video linki yapıştır (.mp4, .webm)">
+        <input type="text" id="video-url" placeholder="Emo seni seviyor behiyeeeeeee, şapşiğim (.mp4, .webm)">
         <button id="load-video">Yükle</button>
       </div>
 
       <div class="theatre" id="theatre">
-        <video id="video-player" controls controlsList="nofullscreen noremoteplayback" playsinline></video>
+        <div class="video-wrap" id="video-wrap">
+          <video id="video-player" controls controlsList="nofullscreen noremoteplayback" playsinline></video>
 
-        <button class="fs-btn" id="fullscreen-btn" title="Tam ekran / çık" aria-label="Tam ekran">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M3 16v3a2 2 0 0 0 2 2h3"/>
-          </svg>
-        </button>
+          <div class="video-controls-extra">
+            <button class="seek-btn" id="seek-back-btn" title="5 saniye geri" aria-label="5 saniye geri">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/></svg>
+              <span>5</span>
+            </button>
+            <button class="seek-btn" id="seek-fwd-btn" title="5 saniye ileri" aria-label="5 saniye ileri">
+              <span>5</span>
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>
+            </button>
+          </div>
 
-        <div class="empty-screen" id="empty-screen">
-          <p>Henüz bir video yüklenmedi.</p>
-          <p class="empty-screen-sub">Üstteki kutuya bir video linki yapıştırıp <strong>Yükle</strong>'ye bas — herkesin ekranında birlikte açılsın.</p>
+          <button class="fs-btn" id="fullscreen-btn" title="Tam ekran / çık" aria-label="Tam ekran">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M3 16v3a2 2 0 0 0 2 2h3"/>
+            </svg>
+          </button>
+
+          <div class="empty-screen" id="empty-screen">
+            <p>Henüz bir video yüklenmedi.</p>
+            <p class="empty-screen-sub">Üstteki kutuya bir video linki yapıştırıp <strong>Yükle</strong>'ye bas — herkesin ekranında birlikte açılsın.</p>
+          </div>
+
+          <div class="emote-fly-layer" id="emote-fly-layer" aria-hidden="true"></div>
         </div>
 
         <aside class="chat-panel" id="chat-panel">
@@ -49,6 +64,20 @@
             <button class="chat-toggle" id="chat-toggle" title="Sohbeti küçült" aria-label="Sohbeti küçült">–</button>
           </div>
           <div class="chat-box" id="chat-box"></div>
+          <div class="emote-bar" id="emote-bar">
+            <button type="button" data-emoji="😂" title="😂">😂</button>
+            <button type="button" data-emoji="❤️" title="❤️">❤️</button>
+            <button type="button" data-emoji="😮" title="😮">😮</button>
+            <button type="button" data-emoji="😢" title="😢">😢</button>
+            <button type="button" data-emoji="😡" title="😡">😡</button>
+            <button type="button" data-emoji="👍" title="👍">👍</button>
+            <button type="button" data-emoji="👏" title="👏">👏</button>
+            <button type="button" data-emoji="🔥" title="🔥">🔥</button>
+            <button type="button" data-emoji="🎉" title="🎉">🎉</button>
+            <button type="button" data-emoji="🍿" title="🍿">🍿</button>
+            <button type="button" data-emoji="😱" title="😱">😱</button>
+            <button type="button" data-emoji="💀" title="💀">💀</button>
+          </div>
           <div class="chat-input-row">
             <input type="text" id="chat-input" placeholder="Mesaj yaz..." maxlength="300">
             <button id="send-chat">Gönder</button>
