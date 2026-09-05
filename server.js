@@ -43,6 +43,14 @@ function send(ws, message) {
   }
 }
 
+// clientId'ye göre o odadaki websocket bağlantısını bulur (sinyal iletimi için).
+function findWsByClientId(room, id) {
+  for (const [clientWs, info] of room.users.entries()) {
+    if (info.id === id) return clientWs;
+  }
+  return null;
+}
+
 // Odayı temizler: kullanıcı kalmadıysa Map'ten O(1) sürede kaldırır.
 function cleanupRoomIfEmpty(room) {
   if (room && room.users.size === 0) {
@@ -86,7 +94,8 @@ wss.on("connection", (ws) => {
 
       room.users.set(ws, {
         id: clientId,
-        name
+        name,
+        voice: false
       });
 
       send(ws, {
@@ -156,6 +165,63 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    // ---- Sesli sohbet (WebRTC) sinyalleşmesi ----
+
+    // Mikrofonunu açan kullanıcı odadaki diğer sesli kullanıcıları öğrenir,
+    // onlara da yeni katılımcının geldiği bildirilir. Bağlantıları her zaman
+    // yeni katılan taraf başlatır (offer gönderir).
+    if (message.type === "voice-join") {
+      const info = room.users.get(ws);
+      if (!info) return;
+      info.voice = true;
+
+      const peers = [];
+      for (const [clientWs, otherInfo] of room.users.entries()) {
+        if (clientWs === ws || !otherInfo.voice) continue;
+        peers.push({ id: otherInfo.id, name: otherInfo.name });
+      }
+
+      send(ws, { type: "voice-peers", peers });
+
+      broadcast(room, {
+        type: "voice-join",
+        id: clientId,
+        name
+      }, ws);
+
+      return;
+    }
+
+    // Mikrofonu kapatma
+    if (message.type === "voice-leave") {
+      const info = room.users.get(ws);
+      if (info) info.voice = false;
+
+      broadcast(room, {
+        type: "voice-leave",
+        id: clientId
+      }, ws);
+
+      return;
+    }
+
+    // WebRTC offer/answer/ICE — sadece hedeflenen tek bir katılımcıya iletilir
+    if (message.type === "signal") {
+      const targetId = message.to;
+      if (!targetId) return;
+
+      const targetWs = findWsByClientId(room, targetId);
+      if (!targetWs) return;
+
+      send(targetWs, {
+        type: "signal",
+        from: clientId,
+        data: message.data
+      });
+
+      return;
+    }
+
     // Sohbet
     if (message.type === "chat") {
       broadcast(room, {
@@ -176,12 +242,22 @@ wss.on("connection", (ws) => {
   ws.on("close", () => {
     if (!room) return;
 
+    const info = room.users.get(ws);
+    const wasInVoice = !!(info && info.voice);
+
     room.users.delete(ws);
 
     broadcast(room, {
       type: "system",
       text: `${name} odadan ayrıldı.`
     });
+
+    if (wasInVoice) {
+      broadcast(room, {
+        type: "voice-leave",
+        id: clientId
+      });
+    }
 
     cleanupRoomIfEmpty(room);
   });

@@ -15,6 +15,15 @@
     <span class="wordmark">Perde</span>
     <div class="marquee-meta">
       <span class="room-pill" id="room-pill" hidden>Oda <strong id="room-pill-code">—</strong></span>
+      <button class="mic-btn" id="mic-btn" data-state="off" title="Mikrofonu aç" aria-label="Mikrofonu aç">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+          <line x1="12" y1="19" x2="12" y2="23"/>
+          <line x1="8" y1="23" x2="16" y2="23"/>
+        </svg>
+        <span class="mic-label">Mikrofon</span>
+      </button>
       <span class="conn" id="conn-indicator" data-state="connecting">
         <span class="conn-dot"></span>
         <span class="conn-label">Bağlanıyor…</span>
@@ -25,13 +34,13 @@
   <main class="stage-area">
     <div class="video-column">
       <div class="url-bar">
-        <input type="text" id="video-url" placeholder="Emo seni seviyor behiyeeeeeee, şapşiğim (.mp4, .webm)">
+        <input type="text" id="video-url" placeholder="kuduruk behiye simulator (.mp4, .webm)">
         <button id="load-video">Yükle</button>
       </div>
 
       <div class="theatre" id="theatre">
         <div class="video-wrap" id="video-wrap">
-          <video id="video-player" controls controlsList="nofullscreen noremoteplayback" playsinline></video>
+          <video id="video-player" controls controlsList="nofullscreen noremoteplayback nopictureinpicture" disablePictureInPicture playsinline></video>
 
           <div class="video-controls-extra">
             <button class="seek-btn" id="seek-back-btn" title="5 saniye geri" aria-label="5 saniye geri">
@@ -59,16 +68,24 @@
         </div>
 
         <aside class="chat-panel" id="chat-panel">
+          <div class="chat-resize-handle" id="chat-resize-handle"></div>
+
           <div class="chat-header">
             <span>Sohbet</span>
             <button class="chat-toggle" id="chat-toggle" title="Sohbeti küçült" aria-label="Sohbeti küçült">–</button>
           </div>
+
+          <div class="voice-roster" id="voice-roster" hidden></div>
+
           <div class="chat-box" id="chat-box"></div>
+
           <div class="emote-bar" id="emote-bar">
             <button type="button" data-emoji="😂" title="😂">😂</button>
+            <button type="button" data-emoji="🤣" title="🤣">🤣</button>
             <button type="button" data-emoji="❤️" title="❤️">❤️</button>
             <button type="button" data-emoji="😮" title="😮">😮</button>
             <button type="button" data-emoji="😢" title="😢">😢</button>
+            <button type="button" data-emoji="😭" title="😭">😭</button>
             <button type="button" data-emoji="😡" title="😡">😡</button>
             <button type="button" data-emoji="👍" title="👍">👍</button>
             <button type="button" data-emoji="👏" title="👏">👏</button>
@@ -77,8 +94,20 @@
             <button type="button" data-emoji="🍿" title="🍿">🍿</button>
             <button type="button" data-emoji="😱" title="😱">😱</button>
             <button type="button" data-emoji="💀" title="💀">💀</button>
+            <button type="button" data-emoji="😍" title="😍">😍</button>
+            <button type="button" data-emoji="😴" title="😴">😴</button>
+            <button type="button" data-emoji="🤔" title="🤔">🤔</button>
+            <button type="button" data-emoji="😎" title="😎">😎</button>
+            <button type="button" data-emoji="🙄" title="🙄">🙄</button>
+            <button type="button" data-emoji="🥳" title="🥳">🥳</button>
+            <button type="button" data-emoji="👀" title="👀">👀</button>
+            <button type="button" data-emoji="💯" title="💯">💯</button>
+            <button type="button" data-emoji="🙌" title="🙌">🙌</button>
+            <button type="button" data-emoji="🤯" title="🤯">🤯</button>
           </div>
+
           <div class="chat-input-row">
+            <button type="button" class="emote-toggle-btn" id="emote-toggle-btn" title="Emojileri göster/gizle" aria-label="Emojileri göster/gizle">😊</button>
             <input type="text" id="chat-input" placeholder="Mesaj yaz..." maxlength="300">
             <button id="send-chat">Gönder</button>
           </div>
@@ -86,6 +115,8 @@
       </div>
     </div>
   </main>
+
+  <div class="voice-audio-layer" id="voice-audio-layer" aria-hidden="true" hidden></div>
 
   <!-- Odaya giriş formu: native prompt() yerine temaya uygun modal -->
   <div class="join-overlay" id="join-overlay">

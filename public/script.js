@@ -7,11 +7,17 @@ const chatInput = document.getElementById("chat-input");
 const sendChatBtn = document.getElementById("send-chat");
 const chatToggleBtn = document.getElementById("chat-toggle");
 const chatPanel = document.getElementById("chat-panel");
+const chatResizeHandle = document.getElementById("chat-resize-handle");
 const fullscreenBtn = document.getElementById("fullscreen-btn");
 const seekBackBtn = document.getElementById("seek-back-btn");
 const seekFwdBtn = document.getElementById("seek-fwd-btn");
 const emoteFlyLayer = document.getElementById("emote-fly-layer");
 const emoteBar = document.getElementById("emote-bar");
+const emoteToggleBtn = document.getElementById("emote-toggle-btn");
+const micBtn = document.getElementById("mic-btn");
+const micLabel = micBtn.querySelector(".mic-label");
+const voiceRoster = document.getElementById("voice-roster");
+const voiceAudioLayer = document.getElementById("voice-audio-layer");
 const connIndicator = document.getElementById("conn-indicator");
 const roomPill = document.getElementById("room-pill");
 const roomPillCode = document.getElementById("room-pill-code");
@@ -23,6 +29,7 @@ const joinRoomInput = document.getElementById("join-room");
 let ws = null;
 let roomCode = "";
 let userName = "Misafir";
+let myClientId = Math.random().toString(36).slice(2);
 let isRemoteUpdate = false; // Kendi tetiklediğimiz olayların döngüye girmesini engeller
 let remoteUpdateResetTimer = null;
 let reconnectTimer = null;
@@ -65,11 +72,12 @@ function connectSocket() {
 
   ws.onopen = () => {
     setConnState("online", "Bağlı");
-    ws.send(JSON.stringify({ type: "join", room: roomCode, name: userName }));
+    ws.send(JSON.stringify({ type: "join", room: roomCode, name: userName, clientId: myClientId }));
   };
 
   ws.onclose = () => {
     setConnState("offline", "Bağlantı koptu, tekrar deneniyor…");
+    teardownAllVoicePeers();
     reconnectTimer = setTimeout(connectSocket, 3000);
   };
 
@@ -98,6 +106,22 @@ function connectSocket() {
 
     if (data.type === "emote") {
       spawnEmote(data.emoji);
+    }
+
+    if (data.type === "voice-peers") {
+      handleVoicePeers(data.peers);
+    }
+
+    if (data.type === "voice-join") {
+      handleVoiceJoin(data.id, data.name);
+    }
+
+    if (data.type === "voice-leave") {
+      handleVoiceLeave(data.id);
+    }
+
+    if (data.type === "signal") {
+      handleSignal(data.from, data.data);
     }
   };
 }
@@ -306,13 +330,343 @@ emoteBar.addEventListener("click", (e) => {
   }
 });
 
-// ---------- Tam ekran: theatre tam ekran olur; CSS'te video ve sohbet
-// artık üst üste değil, yan yana (flex) gösteriliyor ----------
+// Emoji çubuğunu göster/gizle
+emoteToggleBtn.addEventListener("click", () => {
+  const nowHidden = emoteBar.classList.toggle("hidden-bar");
+  emoteToggleBtn.setAttribute("aria-pressed", String(!nowHidden));
+});
+
+// ---------- Sohbet panelini yeniden boyutlandırma ----------
+
+const CHAT_WIDTH_STORAGE_KEY = "perde-chat-width";
+const CHAT_MIN_WIDTH = 220;
+const CHAT_MAX_WIDTH = 640;
+
+(function restoreChatWidth() {
+  const saved = parseInt(localStorage.getItem(CHAT_WIDTH_STORAGE_KEY), 10);
+  if (saved && saved >= CHAT_MIN_WIDTH && saved <= CHAT_MAX_WIDTH) {
+    chatPanel.style.setProperty("--chat-width", saved + "px");
+  }
+})();
+
+let resizeStartX = 0;
+let resizeStartWidth = 0;
+let isResizingChat = false;
+
+chatResizeHandle.addEventListener("pointerdown", (e) => {
+  isResizingChat = true;
+  resizeStartX = e.clientX;
+  resizeStartWidth = chatPanel.getBoundingClientRect().width;
+  chatResizeHandle.classList.add("dragging");
+  chatResizeHandle.setPointerCapture(e.pointerId);
+  e.preventDefault();
+});
+
+chatResizeHandle.addEventListener("pointermove", (e) => {
+  if (!isResizingChat) return;
+
+  const delta = e.clientX - resizeStartX;
+  // Panel her zaman sağ kenara hizalı; kolu sola çekmek genişletir.
+  let newWidth = resizeStartWidth - delta;
+  const maxAllowed = Math.min(CHAT_MAX_WIDTH, window.innerWidth * 0.7);
+  newWidth = Math.max(CHAT_MIN_WIDTH, Math.min(maxAllowed, newWidth));
+
+  chatPanel.style.setProperty("--chat-width", Math.round(newWidth) + "px");
+});
+
+function endChatResize(e) {
+  if (!isResizingChat) return;
+  isResizingChat = false;
+  chatResizeHandle.classList.remove("dragging");
+
+  const width = Math.round(chatPanel.getBoundingClientRect().width);
+  localStorage.setItem(CHAT_WIDTH_STORAGE_KEY, width);
+}
+
+chatResizeHandle.addEventListener("pointerup", endChatResize);
+chatResizeHandle.addEventListener("pointercancel", endChatResize);
+
+// ---------- Tam ekran ----------
+// theatre tam ekran olur; CSS'te video ve sohbet artık üst üste değil,
+// yan yana (flex) gösteriliyor. Tarayıcının kendi video oynatıcısındaki
+// (native) tam ekran butonuna veya video'ya çift tıklamaya basılırsa,
+// tarayıcı doğrudan <video> elemanını tam ekran yapar ve bizim CSS'imiz
+// (.theatre:fullscreen) devreye girmez — bu da "chat kayboluyor" sorununa
+// yol açıyordu. Aşağıdaki dinleyiciler bunu yakalayıp otomatik olarak
+// doğru elemanı (theatre) tam ekrana alıyor, kimin tetiklediğinden
+// bağımsız olarak herkeste aynı düzen çalışsın diye.
+
+function goFullscreenOnTheatre() {
+  (theatre.requestFullscreen || theatre.webkitRequestFullscreen)?.call(theatre);
+}
 
 fullscreenBtn.addEventListener("click", () => {
-  if (document.fullscreenElement) {
-    document.exitFullscreen();
+  if (document.fullscreenElement || document.webkitFullscreenElement) {
+    (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
   } else {
-    (theatre.requestFullscreen || theatre.webkitRequestFullscreen)?.call(theatre);
+    goFullscreenOnTheatre();
   }
 });
+
+function redirectNativeVideoFullscreen() {
+  const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+  if (fsEl === videoPlayer) {
+    const exit = document.exitFullscreen || document.webkitExitFullscreen;
+    Promise.resolve(exit?.call(document)).catch(() => {}).then(goFullscreenOnTheatre);
+  }
+}
+
+document.addEventListener("fullscreenchange", redirectNativeVideoFullscreen);
+document.addEventListener("webkitfullscreenchange", redirectNativeVideoFullscreen);
+
+// iOS Safari, videoyu standart Fullscreen API yerine kendi native tam ekran
+// oynatıcısına açar (webkitbeginfullscreen). Bunu da yakalayıp theatre'a
+// yönlendirmeyi deniyoruz.
+videoPlayer.addEventListener("webkitbeginfullscreen", () => {
+  try { videoPlayer.webkitExitFullscreen(); } catch {}
+  goFullscreenOnTheatre();
+});
+
+// ---------- Mikrofon / Sesli sohbet (WebRTC) ----------
+
+const RTC_CONFIG = {
+  iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+};
+
+let localStream = null;
+let micState = "off"; // off | connecting | on | error
+const peerConnections = new Map(); // clientId -> RTCPeerConnection
+const remoteAudioEls = new Map();  // clientId -> <audio>
+const voicePeerNames = new Map();  // clientId -> name
+const mutedPeers = new Set();      // clientId'ler — sadece bizim tarafımızda sessize alınmış
+
+function setMicState(state) {
+  micState = state;
+  micBtn.dataset.state = state;
+
+  const labels = {
+    off: "Mikrofon",
+    connecting: "Bağlanıyor…",
+    on: "Mikrofon açık",
+    error: "Mikrofon hatası"
+  };
+  micLabel.textContent = labels[state] || "Mikrofon";
+  micBtn.title = state === "on" ? "Mikrofonu kapat" : "Mikrofonu aç";
+}
+
+function renderVoiceRoster() {
+  voiceRoster.innerHTML = "";
+
+  if (voicePeerNames.size === 0) {
+    voiceRoster.hidden = true;
+    return;
+  }
+
+  voiceRoster.hidden = false;
+
+  for (const [id, name] of voicePeerNames.entries()) {
+    const pill = document.createElement("button");
+    pill.type = "button";
+    pill.className = "voice-peer";
+    const muted = mutedPeers.has(id);
+    pill.dataset.muted = String(muted);
+    pill.title = muted ? `${name} — sesi kapalı, açmak için tıkla` : `${name} — sesi açık, kapatmak için tıkla`;
+
+    const dot = document.createElement("span");
+    dot.className = "dot";
+
+    const label = document.createElement("span");
+    label.textContent = name;
+
+    pill.appendChild(dot);
+    pill.appendChild(label);
+
+    pill.addEventListener("click", () => togglePeerMute(id));
+
+    voiceRoster.appendChild(pill);
+  }
+}
+
+function togglePeerMute(id) {
+  const audioEl = remoteAudioEls.get(id);
+  if (mutedPeers.has(id)) {
+    mutedPeers.delete(id);
+    if (audioEl) audioEl.muted = false;
+  } else {
+    mutedPeers.add(id);
+    if (audioEl) audioEl.muted = true;
+  }
+  renderVoiceRoster();
+}
+
+function createPeerConnection(peerId) {
+  const pc = new RTCPeerConnection(RTC_CONFIG);
+
+  if (localStream) {
+    localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
+  }
+
+  pc.onicecandidate = (e) => {
+    if (e.candidate) {
+      sendSignal(peerId, { candidate: e.candidate });
+    }
+  };
+
+  pc.ontrack = (e) => {
+    let audioEl = remoteAudioEls.get(peerId);
+    if (!audioEl) {
+      audioEl = document.createElement("audio");
+      audioEl.autoplay = true;
+      audioEl.muted = mutedPeers.has(peerId);
+      voiceAudioLayer.appendChild(audioEl);
+      remoteAudioEls.set(peerId, audioEl);
+    }
+    audioEl.srcObject = e.streams[0];
+  };
+
+  pc.onconnectionstatechange = () => {
+    if (["failed", "closed", "disconnected"].includes(pc.connectionState)) {
+      closePeerConnection(peerId);
+    }
+  };
+
+  peerConnections.set(peerId, pc);
+  return pc;
+}
+
+function closePeerConnection(peerId) {
+  const pc = peerConnections.get(peerId);
+  if (pc) {
+    pc.close();
+    peerConnections.delete(peerId);
+  }
+
+  const audioEl = remoteAudioEls.get(peerId);
+  if (audioEl) {
+    audioEl.srcObject = null;
+    audioEl.remove();
+    remoteAudioEls.delete(peerId);
+  }
+
+  mutedPeers.delete(peerId);
+}
+
+function sendSignal(toId, data) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: "signal", to: toId, data }));
+}
+
+async function callPeer(peerId) {
+  const pc = createPeerConnection(peerId);
+  try {
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    sendSignal(peerId, { sdp: pc.localDescription });
+  } catch (err) {
+    closePeerConnection(peerId);
+  }
+}
+
+async function handleSignal(fromId, data) {
+  if (!localStream) return; // sesli sohbete katılmadıysak sinyalleri yok say
+
+  let pc = peerConnections.get(fromId);
+
+  if (data.sdp) {
+    if (!pc) pc = createPeerConnection(fromId);
+
+    try {
+      await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+
+      if (data.sdp.type === "offer") {
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        sendSignal(fromId, { sdp: pc.localDescription });
+      }
+    } catch (err) {
+      closePeerConnection(fromId);
+    }
+    return;
+  }
+
+  if (data.candidate && pc) {
+    try {
+      await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+    } catch {}
+  }
+}
+
+function handleVoicePeers(peers) {
+  for (const peer of peers) {
+    voicePeerNames.set(peer.id, peer.name);
+    callPeer(peer.id);
+  }
+  renderVoiceRoster();
+}
+
+function handleVoiceJoin(id, name) {
+  voicePeerNames.set(id, name);
+  renderVoiceRoster();
+  // Bağlantıyı her zaman yeni katılan taraf başlatır; biz burada sadece
+  // gelecek offer'ı bekleriz.
+}
+
+function handleVoiceLeave(id) {
+  voicePeerNames.delete(id);
+  closePeerConnection(id);
+  renderVoiceRoster();
+}
+
+function teardownAllVoicePeers() {
+  for (const id of Array.from(peerConnections.keys())) {
+    closePeerConnection(id);
+  }
+  voicePeerNames.clear();
+  renderVoiceRoster();
+}
+
+async function enableMic() {
+  setMicState("connecting");
+
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    setMicState("error");
+    setTimeout(() => setMicState("off"), 2000);
+    return;
+  }
+
+  setMicState("on");
+
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "voice-join" }));
+  }
+}
+
+function disableMic() {
+  if (localStream) {
+    localStream.getTracks().forEach((t) => t.stop());
+    localStream = null;
+  }
+
+  teardownAllVoicePeers();
+
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "voice-leave" }));
+  }
+
+  setMicState("off");
+}
+
+micBtn.addEventListener("click", () => {
+  if (micState === "on") {
+    disableMic();
+  } else if (micState === "off" || micState === "error") {
+    enableMic();
+  }
+});
+
+if (!navigator.mediaDevices || !window.RTCPeerConnection) {
+  micBtn.disabled = true;
+  micBtn.title = "Bu tarayıcı sesli sohbeti desteklemiyor";
+}

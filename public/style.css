@@ -95,6 +95,45 @@ body {
   50% { opacity: 0.35; }
 }
 
+/* ---------- Mikrofon butonu ---------- */
+
+.mic-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-hi);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mic-btn:hover { background: rgba(0, 0, 0, 0.4); }
+
+.mic-btn[data-state="connecting"] {
+  color: var(--marquee);
+  border-color: var(--marquee);
+}
+
+.mic-btn[data-state="on"] {
+  background: #2f6b3a;
+  border-color: #6fbf73;
+  color: #fff;
+}
+
+.mic-btn[data-state="error"] {
+  background: rgba(200, 90, 74, 0.25);
+  border-color: #c85a4a;
+}
+
+@media (max-width: 560px) {
+  .mic-btn .mic-label { display: none; }
+  .mic-btn { padding: 6px 9px; }
+}
+
 /* ---------- Stage ---------- */
 
 .stage-area {
@@ -266,15 +305,15 @@ body {
 
 .fs-btn:hover { background: rgba(140, 47, 59, 0.85); }
 
-/* ---------- Chat panel (docked normally, overlay in fullscreen) ---------- */
+/* ---------- Chat panel (docked normally, side-by-side in fullscreen) ---------- */
 
 .chat-panel {
   position: absolute;
   top: 12px;
   right: 12px;
   bottom: 12px;
-  width: 300px;
-  max-width: 40vw;
+  width: var(--chat-width, 300px);
+  max-width: 70vw;
   background: rgba(27, 22, 19, 0.88);
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -283,6 +322,36 @@ body {
   backdrop-filter: blur(2px);
   z-index: 4;
 }
+
+.chat-resize-handle {
+  position: absolute;
+  top: 0;
+  left: -5px;
+  width: 10px;
+  height: 100%;
+  cursor: ew-resize;
+  z-index: 10;
+  touch-action: none;
+}
+
+.chat-resize-handle::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 40px;
+  border-radius: 3px;
+  background: var(--line);
+}
+
+.chat-resize-handle:hover::after,
+.chat-resize-handle.dragging::after {
+  background: var(--marquee);
+}
+
+.chat-panel.collapsed .chat-resize-handle { display: none; }
 
 .chat-header {
   display: flex;
@@ -305,6 +374,45 @@ body {
   cursor: pointer;
   line-height: 1;
 }
+
+/* ---------- Sesli sohbet listesi ---------- */
+
+.voice-roster {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px 0;
+}
+
+.voice-roster[hidden] { display: none; }
+
+.voice-roster .voice-peer {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--panel-raised);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--text-hi);
+  cursor: pointer;
+}
+
+.voice-roster .voice-peer[data-muted="true"] {
+  color: var(--text-low);
+  opacity: 0.65;
+}
+
+.voice-roster .voice-peer .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #6fbf73;
+  flex-shrink: 0;
+}
+
+.voice-roster .voice-peer[data-muted="true"] .dot { background: var(--text-low); }
 
 .chat-box {
   flex: 1;
@@ -336,11 +444,19 @@ body {
   font-style: italic;
 }
 
+/* ---------- Emote bar (gizlenebilir) ---------- */
+
 .emote-bar {
   display: flex;
   flex-wrap: wrap;
   gap: 2px;
   padding: 6px 10px 0;
+  max-height: 100px;
+  overflow-y: auto;
+}
+
+.emote-bar.hidden-bar {
+  display: none;
 }
 
 .emote-bar button {
@@ -354,6 +470,16 @@ body {
 }
 
 .emote-bar button:hover { background: var(--panel-raised); }
+
+.emote-toggle-btn {
+  flex-shrink: 0;
+  width: 34px;
+  padding: 0 !important;
+  font-size: 16px;
+  background: var(--panel-raised) !important;
+}
+
+.emote-toggle-btn:hover { background: var(--panel) !important; }
 
 .chat-input-row {
   display: flex;
@@ -377,7 +503,9 @@ body {
 
 /* Collapsed state — header only, works both docked and overlay */
 .chat-panel.collapsed .chat-box,
-.chat-panel.collapsed .chat-input-row {
+.chat-panel.collapsed .chat-input-row,
+.chat-panel.collapsed .emote-bar,
+.chat-panel.collapsed .voice-roster {
   display: none;
 }
 .chat-panel.collapsed { bottom: auto; }
@@ -409,8 +537,8 @@ body {
   left: auto;
   right: auto;
   bottom: auto;
-  width: 340px;
-  max-width: 340px;
+  width: var(--chat-width, 340px);
+  max-width: 70vw;
   height: 100%;
   flex-shrink: 0;
   border-radius: 0;
@@ -492,13 +620,13 @@ body {
 
 @media (max-width: 760px) {
   .stage-area { padding: 14px; }
-  .chat-panel { width: 82vw; max-width: none; }
+  .chat-panel { width: var(--chat-width, 82vw); max-width: none; }
   .wordmark { font-size: 26px; }
 
   .theatre:fullscreen .chat-panel,
   .theatre:-webkit-full-screen .chat-panel {
-    width: 40vw;
-    max-width: 40vw;
+    width: var(--chat-width, 46vw);
+    max-width: 60vw;
   }
 
   .theatre:fullscreen .chat-panel.collapsed,
