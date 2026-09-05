@@ -16,11 +16,15 @@ const emoteBar = document.getElementById("emote-bar");
 const emoteToggleBtn = document.getElementById("emote-toggle-btn");
 const micBtn = document.getElementById("mic-btn");
 const micLabel = micBtn.querySelector(".mic-label");
+const pttBtn = document.getElementById("ptt-btn");
+const pttKeyLabel = document.getElementById("ptt-key-label");
+const pttRebindBtn = document.getElementById("ptt-rebind-btn");
 const voiceRoster = document.getElementById("voice-roster");
 const voiceAudioLayer = document.getElementById("voice-audio-layer");
 const connIndicator = document.getElementById("conn-indicator");
 const roomPill = document.getElementById("room-pill");
 const roomPillCode = document.getElementById("room-pill-code");
+const leaveRoomBtn = document.getElementById("leave-room-btn");
 const joinOverlay = document.getElementById("join-overlay");
 const joinForm = document.getElementById("join-form");
 const joinNameInput = document.getElementById("join-name");
@@ -48,10 +52,57 @@ joinForm.addEventListener("submit", (e) => {
   roomCode = room.toUpperCase();
   roomPillCode.textContent = roomCode;
   roomPill.hidden = false;
+  leaveRoomBtn.hidden = false;
   joinOverlay.hidden = true;
 
   connectSocket();
 });
+
+// ---------- Odadan çıkış (ana menüye dön) ----------
+
+function leaveRoom() {
+  clearTimeout(reconnectTimer);
+
+  disableMic();
+
+  if (ws) {
+    try {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "leave" }));
+      }
+    } catch {}
+    ws.onclose = null;
+    ws.onerror = null;
+    ws.close();
+    ws = null;
+  }
+
+  // Videoyu ve arayüzü sıfırla
+  videoPlayer.pause();
+  videoPlayer.removeAttribute("src");
+  videoPlayer.load();
+  delete videoPlayer.dataset.src;
+  theatre.classList.remove("has-video");
+  videoUrlInput.value = "";
+
+  if (document.fullscreenElement || document.webkitFullscreenElement) {
+    (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+  }
+
+  chatBox.innerHTML = "";
+  chatInput.value = "";
+
+  roomCode = "";
+  roomPill.hidden = true;
+  leaveRoomBtn.hidden = true;
+  setConnState("connecting", "Bağlanıyor…");
+
+  joinOverlay.hidden = false;
+  joinRoomInput.value = "";
+  joinNameInput.focus();
+}
+
+leaveRoomBtn.addEventListener("click", leaveRoom);
 
 // ---------- WebSocket bağlantısı + otomatik yeniden bağlanma ----------
 
@@ -429,16 +480,41 @@ videoPlayer.addEventListener("webkitbeginfullscreen", () => {
 
 // ---------- Mikrofon / Sesli sohbet (WebRTC) ----------
 
+// STUN tek başına, iki farklı ağdaki (ör. iki farklı ev interneti) kullanıcılar
+// arasında çoğu zaman doğrudan bağlantı kuramaz (NAT/firewall engeller) — bu da
+// "mikrofon açık ama karşıya ses gitmiyor" şikayetinin en yaygın sebebidir.
+// Aşağıya bir TURN sunucusu (relay) ekliyoruz ki bağlantı doğrudan kurulamadığında
+// ses trafiği relay üzerinden akabilsin. Bu ücretsiz/genel bir test TURN'üdür;
+// üretimde kendi TURN sunucunuzu (örn. coturn) kullanmanız önerilir.
 const RTC_CONFIG = {
-  iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    {
+      urls: "turn:openrelay.metered.ca:80",
+      username: "openrelayproject",
+      credential: "openrelayproject"
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443",
+      username: "openrelayproject",
+      credential: "openrelayproject"
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443?transport=tcp",
+      username: "openrelayproject",
+      credential: "openrelayproject"
+    }
+  ]
 };
 
 let localStream = null;
 let micState = "off"; // off | connecting | on | error
+let isTalking = false; // bas-konuş: şu an gerçekten ses gönderiyor muyuz
 const peerConnections = new Map(); // clientId -> RTCPeerConnection
 const remoteAudioEls = new Map();  // clientId -> <audio>
 const voicePeerNames = new Map();  // clientId -> name
 const mutedPeers = new Set();      // clientId'ler — sadece bizim tarafımızda sessize alınmış
+const pendingCandidates = new Map(); // clientId -> ICE aday kuyruğu (remote description gelmeden önce)
 
 function setMicState(state) {
   micState = state;
@@ -447,11 +523,16 @@ function setMicState(state) {
   const labels = {
     off: "Mikrofon",
     connecting: "Bağlanıyor…",
-    on: "Mikrofon açık",
+    on: "Sesli sohbette",
     error: "Mikrofon hatası"
   };
   micLabel.textContent = labels[state] || "Mikrofon";
-  micBtn.title = state === "on" ? "Mikrofonu kapat" : "Mikrofonu aç";
+  micBtn.title = state === "on" ? "Sesli sohbetten çık" : "Sesli sohbete katıl";
+
+  const connected = state === "on";
+  pttBtn.hidden = !connected;
+  pttRebindBtn.hidden = !connected;
+  if (!connected) stopTalking();
 }
 
 function renderVoiceRoster() {
@@ -549,6 +630,7 @@ function closePeerConnection(peerId) {
   }
 
   mutedPeers.delete(peerId);
+  pendingCandidates.delete(peerId);
 }
 
 function sendSignal(toId, data) {
@@ -578,6 +660,16 @@ async function handleSignal(fromId, data) {
     try {
       await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
 
+      // Remote description gelmeden önce biriken ICE adaylarını şimdi ekle —
+      // aksi halde sessizce yok sayılıp bağlantı hiç kurulamayabiliyordu.
+      const queued = pendingCandidates.get(fromId);
+      if (queued && queued.length) {
+        for (const cand of queued) {
+          try { await pc.addIceCandidate(new RTCIceCandidate(cand)); } catch {}
+        }
+        pendingCandidates.delete(fromId);
+      }
+
       if (data.sdp.type === "offer") {
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
@@ -589,10 +681,17 @@ async function handleSignal(fromId, data) {
     return;
   }
 
-  if (data.candidate && pc) {
-    try {
-      await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-    } catch {}
+  if (data.candidate) {
+    if (pc && pc.remoteDescription) {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+      } catch {}
+    } else {
+      // Henüz remote description yok (offer/answer daha ulaşmadı) —
+      // adayı kuyruğa al, description gelince ekleyeceğiz.
+      if (!pendingCandidates.has(fromId)) pendingCandidates.set(fromId, []);
+      pendingCandidates.get(fromId).push(data.candidate);
+    }
   }
 }
 
@@ -636,6 +735,12 @@ async function enableMic() {
     return;
   }
 
+  // Sesli sohbete katılıyoruz ama bas-konuş tuşuna/basılı tutma butonuna
+  // basılana kadar mikrofon sessiz (track devre dışı) — bağlantı hazır
+  // bekliyor, konuşmaya başladığımız an track'i etkinleştiriyoruz.
+  localStream.getTracks().forEach((t) => { t.enabled = false; });
+  isTalking = false;
+
   setMicState("on");
 
   if (ws && ws.readyState === WebSocket.OPEN) {
@@ -644,6 +749,8 @@ async function enableMic() {
 }
 
 function disableMic() {
+  stopTalking();
+
   if (localStream) {
     localStream.getTracks().forEach((t) => t.stop());
     localStream = null;
@@ -670,3 +777,106 @@ if (!navigator.mediaDevices || !window.RTCPeerConnection) {
   micBtn.disabled = true;
   micBtn.title = "Bu tarayıcı sesli sohbeti desteklemiyor";
 }
+
+// ---------- Bas-konuş (push-to-talk) ----------
+
+const PTT_KEY_STORAGE_KEY = "perde-ptt-key";
+let pttKey = localStorage.getItem(PTT_KEY_STORAGE_KEY) || "Space";
+let isRebindingPtt = false;
+
+function friendlyKeyName(code) {
+  if (!code) return "Space";
+  if (code === "Space") return "Space";
+  if (code.startsWith("Key")) return code.slice(3);
+  if (code.startsWith("Digit")) return code.slice(5);
+  if (code.startsWith("Arrow")) return code.slice(5);
+  return code;
+}
+
+function renderPttKeyLabel() {
+  pttKeyLabel.textContent = friendlyKeyName(pttKey);
+}
+renderPttKeyLabel();
+
+function startTalking() {
+  if (!localStream || micState !== "on" || isTalking) return;
+  isTalking = true;
+  localStream.getTracks().forEach((t) => { t.enabled = true; });
+  micBtn.dataset.talking = "true";
+  pttBtn.dataset.talking = "true";
+}
+
+function stopTalking() {
+  if (!isTalking) {
+    micBtn.removeAttribute("data-talking");
+    pttBtn.removeAttribute("data-talking");
+    return;
+  }
+  isTalking = false;
+  if (localStream) {
+    localStream.getTracks().forEach((t) => { t.enabled = false; });
+  }
+  micBtn.removeAttribute("data-talking");
+  pttBtn.removeAttribute("data-talking");
+}
+
+function isTypingTarget(el) {
+  if (!el) return false;
+  const tag = el.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
+}
+
+// Basılı tutma: bas-konuş butonuna fare/dokunmatikle basılı tutmak
+pttBtn.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  pttBtn.setPointerCapture(e.pointerId);
+  startTalking();
+});
+["pointerup", "pointercancel", "pointerleave"].forEach((evt) => {
+  pttBtn.addEventListener(evt, () => stopTalking());
+});
+
+// Basılı tutma: klavyeden atanan tuş (varsayılan: Space)
+document.addEventListener("keydown", (e) => {
+  if (isRebindingPtt) return;
+
+  if (e.code === pttKey && !e.repeat && !isTypingTarget(document.activeElement)) {
+    e.preventDefault();
+    startTalking();
+  }
+});
+
+document.addEventListener("keyup", (e) => {
+  if (e.code === pttKey) {
+    stopTalking();
+  }
+});
+
+// Sekme/pencere odağını kaybedince tuş bırakılmış sayılır, aksi halde
+// mikrofon "yapışık" kalıp sürekli açık kalabilir.
+window.addEventListener("blur", () => stopTalking());
+
+// Tuş değiştirme: butona tıkla, sonra istediğin tuşa bas
+pttRebindBtn.addEventListener("click", () => {
+  if (isRebindingPtt) return;
+  isRebindingPtt = true;
+  pttRebindBtn.dataset.listening = "true";
+  const prevLabel = pttKeyLabel.textContent;
+  pttKeyLabel.textContent = "Tuşa bas…";
+
+  const onKey = (e) => {
+    e.preventDefault();
+    if (e.code === "Escape") {
+      pttKeyLabel.textContent = prevLabel;
+    } else {
+      pttKey = e.code;
+      localStorage.setItem(PTT_KEY_STORAGE_KEY, pttKey);
+      renderPttKeyLabel();
+    }
+    isRebindingPtt = false;
+    pttRebindBtn.removeAttribute("data-listening");
+    document.removeEventListener("keydown", onKey, true);
+  };
+
+  document.addEventListener("keydown", onKey, true);
+});

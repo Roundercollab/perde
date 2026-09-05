@@ -56,8 +56,15 @@ body {
 .marquee-meta {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
   font-size: 13px;
+  flex-wrap: wrap;
+}
+
+.voice-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .room-pill {
@@ -129,9 +136,103 @@ body {
   border-color: #c85a4a;
 }
 
+.mic-btn[data-talking="true"] {
+  background: #6fbf73;
+  border-color: #a9e0ac;
+  color: #0e0c0b;
+  box-shadow: 0 0 0 3px rgba(111, 191, 115, 0.35);
+}
+
 @media (max-width: 560px) {
   .mic-btn .mic-label { display: none; }
   .mic-btn { padding: 6px 9px; }
+}
+
+/* ---------- Bas-konuş (push-to-talk) butonu + tuş rozeti ---------- */
+
+.ptt-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-hi);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+}
+
+.ptt-btn:hover { background: rgba(0, 0, 0, 0.4); }
+
+.ptt-btn[hidden] { display: none; }
+
+.ptt-btn[data-talking="true"] {
+  background: #6fbf73;
+  border-color: #a9e0ac;
+  color: #0e0c0b;
+  box-shadow: 0 0 0 3px rgba(111, 191, 115, 0.35);
+}
+
+.ptt-key-label {
+  background: rgba(255, 255, 255, 0.12);
+  padding: 1px 6px;
+  border-radius: 5px;
+  text-transform: uppercase;
+}
+
+.ptt-rebind-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-hi);
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ptt-rebind-btn:hover { background: rgba(0, 0, 0, 0.4); }
+.ptt-rebind-btn[hidden] { display: none; }
+.ptt-rebind-btn[data-listening="true"] {
+  color: var(--marquee);
+  border-color: var(--marquee);
+  animation: pulse 1.1s infinite;
+}
+
+/* ---------- Odadan çık ---------- */
+
+.leave-room-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-hi);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.leave-room-btn:hover {
+  background: rgba(200, 90, 74, 0.35);
+  border-color: #c85a4a;
+}
+
+.leave-room-btn[hidden] { display: none; }
+
+@media (max-width: 700px) {
+  .leave-room-btn span { display: none; }
+  .leave-room-btn { padding: 6px 9px; }
 }
 
 /* ---------- Stage ---------- */
@@ -219,12 +320,16 @@ body {
   display: block;
 }
 
-.video-controls-extra {
+/* Video üzerindeki özel kontroller (5sn geri/ileri, tam ekran) tek bir
+   kümede üst-sol köşede duruyor. Bu sayede ne tarayıcının native video
+   kontrol çubuğuyla (alt kısım) ne de sohbet paneliyle (sağ kısım)
+   çakışıyorlar. */
+.player-controls-top {
   position: absolute;
-  bottom: 14px;
-  left: 14px;
+  top: 12px;
+  left: 12px;
   display: flex;
-  gap: 8px;
+  gap: 6px;
   z-index: 5;
 }
 
@@ -232,11 +337,11 @@ body {
   display: flex;
   align-items: center;
   gap: 3px;
-  height: 36px;
-  padding: 0 11px;
+  height: 34px;
+  padding: 0 10px;
   border-radius: 8px;
   border: none;
-  background: rgba(14, 12, 11, 0.6);
+  background: rgba(14, 12, 11, 0.65);
   color: var(--text-hi);
   cursor: pointer;
   font-size: 12px;
@@ -287,23 +392,10 @@ body {
 .theatre.has-video .empty-screen { display: none; }
 
 .fs-btn {
-  position: absolute;
-  bottom: 14px;
-  right: 14px;
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  border: none;
-  background: rgba(14, 12, 11, 0.6);
-  color: var(--text-hi);
-  display: flex;
-  align-items: center;
+  width: 34px;
+  padding: 0 !important;
   justify-content: center;
-  cursor: pointer;
-  z-index: 5;
 }
-
-.fs-btn:hover { background: rgba(140, 47, 59, 0.85); }
 
 /* ---------- Chat panel (docked normally, side-by-side in fullscreen) ---------- */
 
