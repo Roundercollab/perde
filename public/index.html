@@ -27,6 +27,7 @@
           <span class="mic-label">Mikrofon</span>
         </button>
 
+        <button class="mic-btn" id="camera-btn" type="button" aria-pressed="false">Kamera aç</button>
         <button class="ptt-btn" id="ptt-btn" type="button" hidden title="Basılı tutup konuş">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
@@ -57,10 +58,12 @@
   <main class="stage-area">
     <div class="video-column">
       <div class="url-bar">
-        <input type="text" id="video-url" placeholder="kuduruk behiye simulator (.mp4, .webm)">
+        <input type="text" id="video-url" aria-label="Video bağlantısı" placeholder="YouTube, Vimeo, HLS veya video bağlantısı">
         <button id="load-video">Yükle</button>
       </div>
 
+      <p id="media-status" role="status" hidden></p>
+      <div id="camera-strip" aria-label="Oda kameraları"></div>
       <div class="theatre" id="theatre">
         <div class="video-wrap" id="video-wrap">
           <video id="video-player" controls controlsList="nofullscreen noremoteplayback nopictureinpicture" disablePictureInPicture playsinline></video>

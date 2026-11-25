@@ -731,3 +731,21 @@ body {
     max-width: 48px;
   }
 }
+#media-status { color: var(--text-mid); font-size: .88rem; margin: 0 0 .75rem; }
+#camera-strip { display: flex; gap: .5rem; overflow-x: auto; }
+#camera-strip figure { flex: 0 0 auto; width: clamp(88px, 15vw, 152px); position: relative; margin: 0 0 .65rem; }
+#camera-strip video { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 10px; background: #161417; }
+#camera-strip figcaption { position: absolute; bottom: 5px; left: 6px; max-width: 90%; overflow: hidden; text-overflow: ellipsis; color: white; background: #171419c9; border-radius: 4px; padding: 2px 6px; font-size: 12px; }
+.emote-bar { gap: 4px; padding-block: 7px; }
+.emote-bar button { border: 1px solid transparent; border-radius: 9px; padding: 5px; transition: transform .16s, background .16s; }
+.emote-bar button:hover, .emote-bar button:focus-visible { background: #572d38; border-color: #a76b7a; transform: translateY(-2px); }
+.emote-bar button:active { transform: scale(.9); }
+.flying-emote { font-size: clamp(26px, 3vw, 38px); filter: drop-shadow(0 3px 5px #24121cad); }
+@media (prefers-reduced-motion: reduce) {
+  .emote-bar button { transition: none; }
+  .flying-emote { animation: reaction-fade .8s linear forwards; animation-duration: .8s !important; }
+  @keyframes reaction-fade { from { opacity: 1; } to { opacity: 0; } }
+}
+
+#media-status a { color: var(--marquee); }
+.video-wrap > #camera-strip { position: absolute; z-index: 4; left: 12px; right: 12px; top: 52px; pointer-events: none; }

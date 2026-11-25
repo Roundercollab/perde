@@ -3,10 +3,15 @@
   "version": "2.0.0",
   "private": true,
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build:players": "esbuild youtube-video-element vimeo-video-element hls-video-element --bundle --format=esm --minify --outdir=public/players"
   },
   "dependencies": {
+    "esbuild": "^0.28.2",
     "express": "^4.21.2",
-    "ws": "^8.18.0"
+    "hls-video-element": "^1.5.12",
+    "vimeo-video-element": "^1.7.5",
+    "ws": "^8.18.0",
+    "youtube-video-element": "^1.9.1"
   }
 }

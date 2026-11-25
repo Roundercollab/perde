@@ -1,4 +1,4 @@
-const videoPlayer = document.getElementById("video-player");
+let videoPlayer = document.getElementById("video-player");
 const videoUrlInput = document.getElementById("video-url");
 const loadVideoBtn = document.getElementById("load-video");
 const theatre = document.getElementById("theatre");
@@ -63,7 +63,10 @@ joinForm.addEventListener("submit", (e) => {
 function leaveRoom() {
   clearTimeout(reconnectTimer);
 
+  deviceSession++;
+  disableCamera();
   disableMic();
+  teardownAllVoicePeers();
 
   if (ws) {
     try {
@@ -78,10 +81,8 @@ function leaveRoom() {
   }
 
   // Videoyu ve arayüzü sıfırla
-  videoPlayer.pause();
-  videoPlayer.removeAttribute("src");
-  videoPlayer.load();
-  delete videoPlayer.dataset.src;
+  resetPlayer();
+  showMediaStatus("");
   theatre.classList.remove("has-video");
   videoUrlInput.value = "";
 
@@ -139,6 +140,9 @@ function connectSocket() {
   ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
 
+    if (data.type === "joined" && window.RTCPeerConnection) {
+      ws.send(JSON.stringify({ type: "voice-join" }));
+    }
     if (data.type === "joined" && data.state) {
       applyState(data.state);
     }
@@ -184,44 +188,120 @@ function sendAction(text) {
 
 // ---------- Video senkronizasyonu ----------
 
-function applyState(state) {
-  if (!state) return;
+const mediaStatus = document.getElementById("media-status");
+const nativeTemplate = videoPlayer.cloneNode(false);
+let desiredState = null;
+let loadTimer;
 
+function showMediaStatus(message) {
+  mediaStatus.textContent = message;
+  mediaStatus.hidden = !message;
+}
+
+function identifySource(input) {
+  const raw = input.trim();
+  const url = new URL(/^[\w.-]+\.[a-z]{2,}\//i.test(raw) ? "https://" + raw : raw);
+  if (!["http:", "https:"].includes(url.protocol) || url.href.length > 2000) throw Error();
+  const host = url.hostname.replace(/^(www\.|m\.)/, "");
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (["youtube.com", "youtube-nocookie.com", "youtu.be"].includes(host)) {
+    const id = host === "youtu.be" ? parts[0] : url.searchParams.get("v") ||
+      (["shorts", "embed", "live"].includes(parts[0]) && parts[1]);
+    if (!id || !/^[\w-]{11}$/.test(id)) throw Error();
+    return { tag: "youtube-video", url: "https://www.youtube.com/watch?v=" + id };
+  }
+  if (["vimeo.com", "player.vimeo.com"].includes(host) && /^(\/video)?\/\d+(\/|$)/.test(url.pathname)) {
+    return { tag: "vimeo-video", url: url.href };
+  }
+  return { tag: /\.m3u8$/i.test(url.pathname) ? "hls-video" : "video", url: url.href };
+}
+
+function resetPlayer() {
+  desiredState = null;
+  clearTimeout(loadTimer);
+  clearTimeout(remoteUpdateResetTimer);
+  isRemoteUpdate = false;
+  const old = videoPlayer;
+  videoPlayer = nativeTemplate.cloneNode(false);
+  old.replaceWith(videoPlayer);
+  old.removeAttribute("src");
+  if (old instanceof HTMLVideoElement) old.load();
+  lastPlaybackTime = 0;
+  seekStartTime = null;
+}
+
+function applyState(state) {
+  if (!state?.source) return;
+  let source;
+  try { source = identifySource(state.source); } catch { return; }
+  if (desiredState?.source === source.url && !videoPlayer.dataset.failed) {
+    desiredState = state;
+    if (videoPlayer.readyState >= 1) syncPlayback();
+    return;
+  }
+  resetPlayer();
+  desiredState = { ...state, source: source.url };
+  const player = source.tag === "video" ? videoPlayer : document.createElement(source.tag);
+  if (player !== videoPlayer) {
+    player.id = "video-player";
+    player.setAttribute("controls", "");
+    player.setAttribute("playsinline", "");
+    videoPlayer.replaceWith(player);
+    videoPlayer = player;
+  }
+  theatre.classList.add("has-video");
+  showMediaStatus("");
+  bindPlayer(player);
+  const failed = () => {
+    if (player !== videoPlayer) return;
+    player.dataset.failed = "true";
+    clearTimeout(loadTimer);
+    showMediaStatus("Video açılamadı. Paylaşım iznini kontrol et veya doğrudan bir video bağlantısı dene. ");
+    const link = document.createElement("a");
+    link.href = source.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = "Kaynağında aç";
+    mediaStatus.appendChild(link);
+  };
+  player.addEventListener("error", failed);
+  player.addEventListener("loadedmetadata", () => {
+    if (player !== videoPlayer) return;
+    clearTimeout(loadTimer);
+    delete player.dataset.failed;
+    showMediaStatus("");
+    syncPlayback();
+  });
+  loadTimer = setTimeout(failed, 25000);
+  const open = () => { if (player === videoPlayer) player.src = source.url; };
+  if (source.tag === "video") open();
+  else import("./players/" + source.tag + "-element.js").then(() => {
+    if (player !== videoPlayer) return;
+    if (source.tag === "youtube-video") player.config = { fs: 0, origin: location.origin };
+    open();
+  }, failed);
+}
+
+function syncPlayback() {
+  const state = desiredState;
+  if (!state) return;
+  const elapsed = state.playing && state.updatedAt ? Math.max(0, Date.now() - state.updatedAt) / 1000 : 0;
+  const time = state.time + elapsed * state.rate;
+  const needsSeek = Math.abs(videoPlayer.currentTime - time) > 1;
+  if (!needsSeek && videoPlayer.playbackRate === state.rate && state.playing === !videoPlayer.paused) return;
   isRemoteUpdate = true;
   clearTimeout(remoteUpdateResetTimer);
-
-  const finishSync = () => {
-    if (Math.abs(videoPlayer.currentTime - state.time) > 1) {
-      videoPlayer.currentTime = state.time;
-    }
-    videoPlayer.playbackRate = state.rate || 1;
-
-    if (state.playing) {
-      videoPlayer.play().catch(() => {});
-    } else {
-      videoPlayer.pause();
-    }
-
-    // Play()/pause() olayları asenkron gelebildiği için bayrağı hemen değil,
-    // kısa bir payla kaldırıyoruz ki gecikmeli event'ler tekrar broadcast tetiklemesin.
-    remoteUpdateResetTimer = setTimeout(() => { isRemoteUpdate = false; }, 300);
-  };
-
-  const isNewSource = state.source && videoPlayer.dataset.src !== state.source;
-
-  if (isNewSource) {
-    videoPlayer.dataset.src = state.source;
-    videoPlayer.src = state.source;
-    theatre.classList.add("has-video");
-    // Metadata yüklenmeden currentTime atamak tarayıcıda güvenilir çalışmıyor,
-    // bu yüzden seek/rate/play işlemini metadata gelene kadar erteliyoruz.
-    videoPlayer.addEventListener("loadedmetadata", finishSync, { once: true });
-  } else if (videoPlayer.readyState >= 1) {
-    finishSync();
-  } else if (state.source) {
-    videoPlayer.addEventListener("loadedmetadata", finishSync, { once: true });
-  } else {
-    isRemoteUpdate = false;
+  try {
+    if (needsSeek) videoPlayer.currentTime = time;
+    if (videoPlayer.playbackRate !== state.rate) videoPlayer.playbackRate = state.rate;
+    if (state.playing && videoPlayer.paused) {
+      const player = videoPlayer;
+      Promise.resolve(player.play()).catch(() => {
+        if (player === videoPlayer) showMediaStatus("Devam etmek için oynat düğmesine dokun.");
+      });
+    } else if (!state.playing && !videoPlayer.paused) videoPlayer.pause();
+  } finally {
+    remoteUpdateResetTimer = setTimeout(() => { isRemoteUpdate = false; }, 350);
   }
 }
 
@@ -230,7 +310,7 @@ function sendState() {
 
   ws.send(JSON.stringify({
     type: "state",
-    source: videoPlayer.src,
+    source: desiredState?.source,
     playing: !videoPlayer.paused,
     time: videoPlayer.currentTime,
     rate: videoPlayer.playbackRate
@@ -239,55 +319,67 @@ function sendState() {
 
 // Zamanı sürekli takip ediyoruz ki bir sarma (seek) başladığında
 // öncesindeki zamanı bilip kaç saniye sarıldığını hesaplayabilelim.
-videoPlayer.addEventListener("timeupdate", () => {
-  if (!videoPlayer.seeking) {
-    lastPlaybackTime = videoPlayer.currentTime;
-  }
-});
-
-videoPlayer.addEventListener("seeking", () => {
-  if (isRemoteUpdate) return;
-  if (seekStartTime === null) {
-    seekStartTime = lastPlaybackTime;
-  }
-});
-
-videoPlayer.addEventListener("play", () => {
-  sendState();
-  if (!isRemoteUpdate) sendAction("videoyu oynattı");
-});
-
-videoPlayer.addEventListener("pause", () => {
-  sendState();
-  if (!isRemoteUpdate) sendAction("videoyu durdurdu");
-});
-
-videoPlayer.addEventListener("seeked", () => {
-  sendState();
-
-  if (!isRemoteUpdate && seekStartTime !== null) {
-    const delta = videoPlayer.currentTime - seekStartTime;
-    if (Math.abs(delta) >= 0.75) {
-      const secs = Math.round(Math.abs(delta));
-      sendAction(delta > 0 ? `${secs}sn ileri sardı` : `${secs}sn geri sardı`);
+function bindPlayer(player) {
+  player.addEventListener("timeupdate", () => {
+    if (player !== videoPlayer) return;
+    if (!videoPlayer.seeking) {
+      lastPlaybackTime = videoPlayer.currentTime;
     }
-  }
+  });
 
-  seekStartTime = null;
-});
+  player.addEventListener("seeking", () => {
+    if (player !== videoPlayer) return;
+    if (isRemoteUpdate) return;
+    if (seekStartTime === null) {
+      seekStartTime = lastPlaybackTime;
+    }
+  });
 
-videoPlayer.addEventListener("ratechange", () => {
-  sendState();
-  if (!isRemoteUpdate) sendAction(`hızı ${videoPlayer.playbackRate}x yaptı`);
-});
+  player.addEventListener("play", () => {
+    if (player !== videoPlayer) return;
+    sendState();
+    if (!isRemoteUpdate) sendAction("videoyu oynattı");
+  });
+
+  player.addEventListener("pause", () => {
+    if (player !== videoPlayer) return;
+    sendState();
+    if (!isRemoteUpdate) sendAction("videoyu durdurdu");
+  });
+
+  player.addEventListener("seeked", () => {
+    if (player !== videoPlayer) return;
+    sendState();
+
+    if (!isRemoteUpdate && seekStartTime !== null) {
+      const delta = videoPlayer.currentTime - seekStartTime;
+      if (Math.abs(delta) >= 0.75) {
+        const secs = Math.round(Math.abs(delta));
+        sendAction(delta > 0 ? `${secs}sn ileri sardı` : `${secs}sn geri sardı`);
+      }
+    }
+
+    seekStartTime = null;
+  });
+
+  player.addEventListener("ratechange", () => {
+    if (player !== videoPlayer) return;
+    sendState();
+    if (!isRemoteUpdate) sendAction(`hızı ${videoPlayer.playbackRate}x yaptı`);
+  });
+  player.addEventListener("webkitbeginfullscreen", () => {
+    player.webkitExitFullscreen?.();
+    goFullscreenOnTheatre();
+  });
+}
 
 seekBackBtn.addEventListener("click", () => {
-  if (!videoPlayer.src) return;
+  if (!videoPlayer.readyState) return;
   videoPlayer.currentTime = Math.max(0, videoPlayer.currentTime - 5);
 });
 
 seekFwdBtn.addEventListener("click", () => {
-  if (!videoPlayer.src) return;
+  if (!videoPlayer.readyState) return;
   const max = isFinite(videoPlayer.duration) ? videoPlayer.duration : Infinity;
   videoPlayer.currentTime = Math.min(max, videoPlayer.currentTime + 5);
 });
@@ -295,10 +387,17 @@ seekFwdBtn.addEventListener("click", () => {
 loadVideoBtn.addEventListener("click", () => {
   const url = videoUrlInput.value.trim();
   if (!url) return;
-  videoPlayer.dataset.src = url;
-  videoPlayer.src = url;
-  theatre.classList.add("has-video");
-  sendState();
+  let source;
+  try { source = identifySource(url); } catch {
+    showMediaStatus("Geçerli bir video bağlantısı gir.");
+    return;
+  }
+  const state = { source: source.url, playing: false, time: 0, rate: 1 };
+  applyState(state);
+  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "state", ...state }));
+});
+videoUrlInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") loadVideoBtn.click();
 });
 
 // ---------- Sohbet ----------
@@ -518,11 +617,6 @@ document.addEventListener("fullscreenerror", () => {
 // iOS Safari, videoyu standart Fullscreen API yerine kendi native tam ekran
 // oynatıcısına açar (webkitbeginfullscreen). Bunu da yakalayıp theatre'a
 // yönlendirmeyi deniyoruz.
-videoPlayer.addEventListener("webkitbeginfullscreen", () => {
-  try { videoPlayer.webkitExitFullscreen(); } catch {}
-  goFullscreenOnTheatre();
-});
-
 // ---------- Mikrofon / Sesli sohbet (WebRTC) ----------
 
 // STUN tek başına, iki farklı ağdaki (ör. iki farklı ev interneti) kullanıcılar
@@ -591,7 +685,7 @@ function setMicState(state) {
 function renderVoiceRoster() {
   voiceRoster.innerHTML = "";
 
-  if (voicePeerNames.size === 0) {
+  if (activeMics.size === 0) {
     voiceRoster.hidden = true;
     return;
   }
@@ -599,6 +693,7 @@ function renderVoiceRoster() {
   voiceRoster.hidden = false;
 
   for (const [id, name] of voicePeerNames.entries()) {
+    if (!activeMics.has(id)) continue;
     const pill = document.createElement("button");
     pill.type = "button";
     pill.className = "voice-peer";
@@ -633,15 +728,15 @@ function togglePeerMute(id) {
   renderVoiceRoster();
 }
 
-function createPeerConnection(peerId, forceRelay = false) {
+function createPeerConnection(peerId, forceRelay = false, initiator = true) {
   const config = forceRelay
     ? { iceServers: RTC_CONFIG.iceServers, iceTransportPolicy: "relay" }
     : RTC_CONFIG;
 
   const pc = new RTCPeerConnection(config);
 
-  if (localStream) {
-    localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
+  for (const [kind, track] of [["audio", localStream?.getAudioTracks()[0]], ["video", cameraTrack]]) {
+    if (initiator) pc.addTransceiver(track || kind, { direction: "sendrecv" });
   }
 
   pc.onicecandidate = (e) => {
@@ -651,6 +746,11 @@ function createPeerConnection(peerId, forceRelay = false) {
   };
 
   pc.ontrack = (e) => {
+    if (e.track.kind === "video") {
+      remoteVideoTracks.set(peerId, e.track);
+      renderCamera(peerId);
+      return;
+    }
     let audioEl = remoteAudioEls.get(peerId);
     if (!audioEl) {
       audioEl = document.createElement("audio");
@@ -660,7 +760,7 @@ function createPeerConnection(peerId, forceRelay = false) {
       voiceAudioLayer.appendChild(audioEl);
       remoteAudioEls.set(peerId, audioEl);
     }
-    audioEl.srcObject = e.streams[0];
+    audioEl.srcObject = new MediaStream([e.track]);
 
     // Bazı tarayıcılar (özellikle Chrome) kullanıcı etkileşimi olmadan
     // programatik olarak eklenen sesi otomatik oynatmayı engelleyebiliyor.
@@ -721,7 +821,7 @@ function handleConnectionTrouble(peerId) {
   const alreadyVoiceConnected = voicePeerNames.has(peerId);
   closePeerConnection(peerId);
 
-  if (!alreadyVoiceConnected || !localStream) return;
+  if (!alreadyVoiceConnected) return;
 
   if (relayRetried.has(peerId)) {
     appendMessage({ system: true, text: "Sesli bağlantı kurulamadı (ağ/firewall engeli olabilir)." });
@@ -753,6 +853,8 @@ function closePeerConnection(peerId) {
     remoteAudioEls.delete(peerId);
   }
 
+  remoteVideoTracks.delete(peerId);
+  renderCamera(peerId);
   mutedPeers.delete(peerId);
   pendingCandidates.delete(peerId);
   relayRetried.delete(peerId);
@@ -760,7 +862,7 @@ function closePeerConnection(peerId) {
 
 function sendSignal(toId, data) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify({ type: "signal", to: toId, data }));
+  ws.send(JSON.stringify({ type: "signal", to: toId, data: { ...data, camera: Boolean(cameraTrack), mic: Boolean(localStream) } }));
 }
 
 async function callPeer(peerId, forceRelay = false) {
@@ -775,12 +877,22 @@ async function callPeer(peerId, forceRelay = false) {
 }
 
 async function handleSignal(fromId, data) {
-  if (!localStream) return; // sesli sohbete katılmadıysak sinyalleri yok say
+  if (!window.RTCPeerConnection || !roomCode) return;
+  if (typeof data.mic === "boolean" && activeMics.has(fromId) !== data.mic) {
+    if (data.mic) activeMics.add(fromId);
+    else activeMics.delete(fromId);
+    renderVoiceRoster();
+  }
+  if (typeof data.camera === "boolean") {
+    if (data.camera) visibleCameras.add(fromId);
+    else visibleCameras.delete(fromId);
+    renderCamera(fromId);
+  }
 
   let pc = peerConnections.get(fromId);
 
   if (data.sdp) {
-    if (!pc) pc = createPeerConnection(fromId);
+    if (!pc) pc = createPeerConnection(fromId, false, false);
 
     try {
       await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
@@ -796,6 +908,11 @@ async function handleSignal(fromId, data) {
       }
 
       if (data.sdp.type === "offer") {
+        for (const channel of pc.getTransceivers()) {
+          channel.direction = "sendrecv";
+          const track = channel.receiver.track.kind === "video" ? cameraTrack : localStream?.getAudioTracks()[0];
+          await channel.sender.replaceTrack(track || null);
+        }
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         sendSignal(fromId, { sdp: pc.localDescription });
@@ -836,6 +953,8 @@ function handleVoiceJoin(id, name) {
 }
 
 function handleVoiceLeave(id) {
+  activeMics.delete(id);
+  visibleCameras.delete(id);
   voicePeerNames.delete(id);
   closePeerConnection(id);
   renderVoiceRoster();
@@ -845,6 +964,8 @@ function teardownAllVoicePeers() {
   for (const id of Array.from(peerConnections.keys())) {
     closePeerConnection(id);
   }
+  activeMics.clear();
+  visibleCameras.clear();
   voicePeerNames.clear();
   renderVoiceRoster();
 }
@@ -869,15 +990,111 @@ function micErrorMessage(err) {
   return `Mikrofon hatası: ${name || "bilinmeyen hata"}.`;
 }
 
+const cameraBtn = document.getElementById("camera-btn");
+const cameraStrip = document.getElementById("camera-strip");
+const remoteVideoTracks = new Map();
+const visibleCameras = new Set();
+const activeMics = new Set();
+const cameraTiles = new Map();
+let deviceSession = 0;
+let cameraTrack = null;
+
+function placeCameraStrip() {
+  if (currentFullscreenElement() === theatre) document.getElementById("video-wrap").appendChild(cameraStrip);
+  else theatre.before(cameraStrip);
+}
+document.addEventListener("fullscreenchange", placeCameraStrip);
+document.addEventListener("webkitfullscreenchange", placeCameraStrip);
+
+function renderCamera(id) {
+  const local = id === myClientId;
+  const track = local ? cameraTrack : visibleCameras.has(id) && remoteVideoTracks.get(id);
+  let tile = cameraTiles.get(id);
+  if (!track) {
+    if (tile) {
+      tile.querySelector("video").srcObject = null;
+      tile.remove();
+      cameraTiles.delete(id);
+    }
+    return;
+  }
+  if (!tile) {
+    tile = document.createElement("figure");
+    const video = document.createElement("video");
+    video.autoplay = true;
+    video.muted = true;
+    video.playsInline = true;
+    const caption = document.createElement("figcaption");
+    caption.textContent = local ? "Sen" : voicePeerNames.get(id) || "Misafir";
+    tile.append(video, caption);
+    cameraTiles.set(id, tile);
+    cameraStrip.appendChild(tile);
+  }
+  const video = tile.querySelector("video");
+  if (video.srcObject?.getVideoTracks()[0] !== track) video.srcObject = new MediaStream([track]);
+}
+
+function replaceOutgoingTrack(kind, track) {
+  for (const [id, pc] of peerConnections) {
+    const channel = pc.getTransceivers().find(t => t.receiver.track.kind === kind);
+    channel?.sender.replaceTrack(track).catch(() => {
+      if (peerConnections.get(id) === pc) appendMessage({ system: true, text: "Medya paylaşımı güncellenemedi. Odaya tekrar katıl." });
+    });
+  }
+}
+
+function updateCamera() {
+  replaceOutgoingTrack("video", cameraTrack);
+  for (const id of peerConnections.keys()) sendSignal(id, {});
+  cameraBtn.dataset.state = cameraTrack ? "on" : "off";
+  cameraBtn.setAttribute("aria-pressed", String(Boolean(cameraTrack)));
+  cameraBtn.textContent = cameraTrack ? "Kamera kapat" : "Kamera aç";
+  renderCamera(myClientId);
+}
+
+function disableCamera() {
+  cameraTrack?.stop();
+  cameraTrack = null;
+  updateCamera();
+}
+
+cameraBtn.addEventListener("click", async () => {
+  if (cameraTrack) return disableCamera();
+  const session = deviceSession;
+  cameraBtn.disabled = true;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 320 }, height: { ideal: 240 } } });
+    const track = stream.getVideoTracks()[0];
+    if (session !== deviceSession) {
+      track.stop();
+      return;
+    }
+    cameraTrack = track;
+    track.onended = disableCamera;
+    updateCamera();
+  } catch {
+    if (session === deviceSession) appendMessage({ system: true, text: "Kamera açılamadı. Kamera bağlantısını ve tarayıcının kamera iznini kontrol et." });
+  } finally {
+    cameraBtn.disabled = false;
+  }
+});
+
 async function enableMic() {
+  const session = deviceSession;
   setMicState("connecting");
 
   try {
-    localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (session !== deviceSession) {
+      stream.getTracks().forEach(track => track.stop());
+      return;
+    }
+    localStream = stream;
   } catch (err) {
+    if (session !== deviceSession) return;
     setMicState("error");
     appendMessage({ system: true, text: micErrorMessage(err) });
-    setTimeout(() => setMicState("off"), 2500);
+
     return;
   }
 
@@ -887,12 +1104,12 @@ async function enableMic() {
   localStream.getTracks().forEach((t) => { t.enabled = false; });
   isTalking = false;
 
+  replaceOutgoingTrack("audio", localStream.getAudioTracks()[0]);
+  localStream.getAudioTracks()[0].onended = disableMic;
   setMicState("on");
+  for (const id of peerConnections.keys()) sendSignal(id, {});
   appendMessage({ system: true, text: `Sesli sohbete bağlandın. Konuşmak için "${friendlyKeyName(pttKey)}" tuşunu veya bas-konuş düğmesini basılı tut.` });
 
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "voice-join" }));
-  }
 }
 
 function disableMic() {
@@ -903,11 +1120,8 @@ function disableMic() {
     localStream = null;
   }
 
-  teardownAllVoicePeers();
-
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "voice-leave" }));
-  }
+  replaceOutgoingTrack("audio", null);
+  for (const id of peerConnections.keys()) sendSignal(id, {});
 
   setMicState("off");
 }
@@ -922,7 +1136,9 @@ micBtn.addEventListener("click", () => {
 
 if (!navigator.mediaDevices || !window.RTCPeerConnection) {
   micBtn.disabled = true;
-  micBtn.title = "Bu tarayıcı sesli sohbeti desteklemiyor";
+  cameraBtn.disabled = true;
+  cameraBtn.title = micBtn.title = "Kamera ve mikrofon için HTTPS veya localhost kullan.";
+
 }
 
 // ---------- Bas-konuş (push-to-talk) ----------
