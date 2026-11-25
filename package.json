@@ -10,6 +10,8 @@
     "esbuild": "^0.28.2",
     "express": "^4.21.2",
     "hls-video-element": "^1.5.12",
+    "htmlparser2": "^10.1.0",
+    "ipaddr.js": "^2.5.0",
     "vimeo-video-element": "^1.7.5",
     "ws": "^8.18.0",
     "youtube-video-element": "^1.9.1"

@@ -733,7 +733,7 @@ body {
 }
 #media-status { color: var(--text-mid); font-size: .88rem; margin: 0 0 .75rem; }
 #camera-strip { display: flex; gap: .5rem; overflow-x: auto; }
-#camera-strip figure { flex: 0 0 auto; width: clamp(88px, 15vw, 152px); position: relative; margin: 0 0 .65rem; }
+#camera-strip figure { flex: 0 0 auto; width: min(var(--camera-size, 152px), 70vw); position: relative; margin: 0 0 .65rem; }
 #camera-strip video { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 10px; background: #161417; }
 #camera-strip figcaption { position: absolute; bottom: 5px; left: 6px; max-width: 90%; overflow: hidden; text-overflow: ellipsis; color: white; background: #171419c9; border-radius: 4px; padding: 2px 6px; font-size: 12px; }
 .emote-bar { gap: 4px; padding-block: 7px; }
@@ -749,3 +749,19 @@ body {
 
 #media-status a { color: var(--marquee); }
 .video-wrap > #camera-strip { position: absolute; z-index: 4; left: 12px; right: 12px; top: 52px; pointer-events: none; }
+
+#camera-settings { color: var(--text-mid); margin: .5rem 0; font-size: .9rem; }
+#camera-settings summary { cursor: pointer; width: fit-content; }
+.camera-options { display: flex; flex-wrap: wrap; gap: .75rem 1.4rem; padding: .7rem 0; }
+.camera-options label { display: flex; align-items: center; gap: .5rem; }
+.camera-options select { max-width: 52vw; padding: .35rem; background: var(--panel); color: var(--text-hi); border: 1px solid var(--line); border-radius: 5px; }
+#camera-status { color: var(--text-hi); font-size: .9rem; }
+
+#shared-tab-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+#shared-tab-video[hidden], #share-audio[hidden], #share-tab[hidden] { display: none; }
+.theatre.presenting .empty-screen, .theatre.presenting #seek-back-btn, .theatre.presenting #seek-fwd-btn { display: none; }
+.url-bar input { min-width: 0; }
+@media (max-width: 560px) {
+  .url-bar { flex-wrap: wrap; }
+  .url-bar input { flex-basis: 100%; }
+}

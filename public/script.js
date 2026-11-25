@@ -64,6 +64,10 @@ function leaveRoom() {
   clearTimeout(reconnectTimer);
 
   deviceSession++;
+  setPresenter(null);
+  deviceSelect.disabled = qualitySelect.disabled = cameraBtn.disabled = false;
+  pageLookup?.abort();
+  showCameraStatus("");
   disableCamera();
   disableMic();
   teardownAllVoicePeers();
@@ -129,6 +133,7 @@ function connectSocket() {
 
   ws.onclose = () => {
     setConnState("offline", "Bağlantı koptu, tekrar deneniyor…");
+    setPresenter(null);
     teardownAllVoicePeers();
     reconnectTimer = setTimeout(connectSocket, 3000);
   };
@@ -141,13 +146,17 @@ function connectSocket() {
     const data = JSON.parse(event.data);
 
     if (data.type === "joined" && window.RTCPeerConnection) {
+      if (data.turn) RTC_CONFIG.iceServers = [RTC_CONFIG.iceServers[0], data.turn];
       ws.send(JSON.stringify({ type: "voice-join" }));
     }
+    if (data.type === "joined") setPresenter(data.presenter || null);
+    if (data.type === "presenter") setPresenter(data.id);
     if (data.type === "joined" && data.state) {
       applyState(data.state);
     }
 
-    if (data.type === "state") {
+    if (data.type === "state" || data.type === "snapshot") {
+      if (data.type === "state") pageLookup?.abort();
       applyState(data.state);
     }
 
@@ -192,6 +201,21 @@ const mediaStatus = document.getElementById("media-status");
 const nativeTemplate = videoPlayer.cloneNode(false);
 let desiredState = null;
 let loadTimer;
+let pageLookup;
+let sourceChoices = [];
+
+function requestPlaybackSync() {
+  if (ws?.readyState !== WebSocket.OPEN || !desiredState) return;
+  const report = { type: "sync" };
+  if (desiredState.by === myClientId && videoPlayer.readyState >= 2 && !videoPlayer.seeking) {
+    Object.assign(report, { source: desiredState.source, time: videoPlayer.currentTime, playing: !videoPlayer.paused, rate: videoPlayer.playbackRate });
+  }
+  ws.send(JSON.stringify(report));
+}
+setInterval(requestPlaybackSync, 5000);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) requestPlaybackSync();
+});
 
 function showMediaStatus(message) {
   mediaStatus.textContent = message;
@@ -201,7 +225,7 @@ function showMediaStatus(message) {
 function identifySource(input) {
   const raw = input.trim();
   const url = new URL(/^[\w.-]+\.[a-z]{2,}\//i.test(raw) ? "https://" + raw : raw);
-  if (!["http:", "https:"].includes(url.protocol) || url.href.length > 2000) throw Error();
+  if (!["http:", "https:"].includes(url.protocol) || url.href.length > 2000 || url.username || url.password) throw Error();
   const host = url.hostname.replace(/^(www\.|m\.)/, "");
   const parts = url.pathname.split("/").filter(Boolean);
   if (["youtube.com", "youtube-nocookie.com", "youtu.be"].includes(host)) {
@@ -234,7 +258,8 @@ function applyState(state) {
   if (!state?.source) return;
   let source;
   try { source = identifySource(state.source); } catch { return; }
-  if (desiredState?.source === source.url && !videoPlayer.dataset.failed) {
+  state = { ...state, updatedAt: Date.now() };
+  if (desiredState?.source === source.url) {
     desiredState = state;
     if (videoPlayer.readyState >= 1) syncPlayback();
     return;
@@ -263,6 +288,15 @@ function applyState(state) {
     link.rel = "noopener noreferrer";
     link.textContent = "Kaynağında aç";
     mediaStatus.appendChild(link);
+    if (!shareTab.hidden) mediaStatus.append(" veya videoyu ayrı bir sekmede açıp Sekme paylaş düğmesini kullan.");
+
+    if (sourceChoices.includes(source.url) && sourceChoices.length > 1) {
+      const next = document.createElement("button");
+      next.type = "button";
+      next.textContent = "Sayfadaki sonraki videoyu dene";
+      next.onclick = () => publishSource(sourceChoices[(sourceChoices.indexOf(source.url) + 1) % sourceChoices.length]);
+      mediaStatus.append(" ", next);
+    }
   };
   player.addEventListener("error", failed);
   player.addEventListener("loadedmetadata", () => {
@@ -308,9 +342,11 @@ function syncPlayback() {
 function sendState() {
   if (isRemoteUpdate || !ws || ws.readyState !== WebSocket.OPEN) return;
 
+  if (!desiredState || presenter) return;
+  Object.assign(desiredState, { by: myClientId, playing: !videoPlayer.paused, time: videoPlayer.currentTime, rate: videoPlayer.playbackRate, updatedAt: Date.now() });
   ws.send(JSON.stringify({
     type: "state",
-    source: desiredState?.source,
+    source: desiredState.source,
     playing: !videoPlayer.paused,
     time: videoPlayer.currentTime,
     rate: videoPlayer.playbackRate
@@ -337,12 +373,14 @@ function bindPlayer(player) {
 
   player.addEventListener("play", () => {
     if (player !== videoPlayer) return;
+    if (desiredState?.playing === false) isRemoteUpdate = false;
     sendState();
     if (!isRemoteUpdate) sendAction("videoyu oynattı");
   });
 
   player.addEventListener("pause", () => {
     if (player !== videoPlayer) return;
+    if (desiredState?.playing === true) isRemoteUpdate = false;
     sendState();
     if (!isRemoteUpdate) sendAction("videoyu durdurdu");
   });
@@ -364,9 +402,11 @@ function bindPlayer(player) {
 
   player.addEventListener("ratechange", () => {
     if (player !== videoPlayer) return;
+    if (videoPlayer.playbackRate !== desiredState?.rate) isRemoteUpdate = false;
     sendState();
     if (!isRemoteUpdate) sendAction(`hızı ${videoPlayer.playbackRate}x yaptı`);
   });
+  player.addEventListener("ended", () => { if (player === videoPlayer) sendState(); });
   player.addEventListener("webkitbeginfullscreen", () => {
     player.webkitExitFullscreen?.();
     goFullscreenOnTheatre();
@@ -384,7 +424,16 @@ seekFwdBtn.addEventListener("click", () => {
   videoPlayer.currentTime = Math.min(max, videoPlayer.currentTime + 5);
 });
 
-loadVideoBtn.addEventListener("click", () => {
+function publishSource(url) {
+  const state = { source: url, playing: false, time: 0, rate: 1, by: myClientId };
+  if (videoPlayer.dataset.failed) resetPlayer();
+  applyState(state);
+  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "state", ...state }));
+}
+
+loadVideoBtn.addEventListener("click", async () => {
+  pageLookup?.abort();
+  sourceChoices = [];
   const url = videoUrlInput.value.trim();
   if (!url) return;
   let source;
@@ -392,9 +441,21 @@ loadVideoBtn.addEventListener("click", () => {
     showMediaStatus("Geçerli bir video bağlantısı gir.");
     return;
   }
-  const state = { source: source.url, playing: false, time: 0, rate: 1 };
-  applyState(state);
-  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "state", ...state }));
+  if (source.tag === "video" && !/\.(mp4|m4v|webm|ogv|ogg|mov)$/i.test(new URL(source.url).pathname)) {
+    const lookup = pageLookup = new AbortController();
+    showMediaStatus("Sayfadaki video aranıyor…");
+    try {
+      const response = await fetch("/api/video-page?url=" + encodeURIComponent(source.url), { signal: lookup.signal });
+      if (response.ok) {
+        const { sources } = await response.json();
+        sourceChoices = sources.flatMap(value => {
+          try { return [identifySource(value).url]; } catch { return []; }
+        });
+      }
+    } catch {}
+    if (lookup.signal.aborted) return;
+  }
+  publishSource(sourceChoices[0] || source.url);
 });
 videoUrlInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") loadVideoBtn.click();
@@ -738,6 +799,12 @@ function createPeerConnection(peerId, forceRelay = false, initiator = true) {
   for (const [kind, track] of [["audio", localStream?.getAudioTracks()[0]], ["video", cameraTrack]]) {
     if (initiator) pc.addTransceiver(track || kind, { direction: "sendrecv" });
   }
+  if (initiator) {
+    const channels = ["video", "audio"].map(kind =>
+      pc.addTransceiver(outgoingPresentationTrack(kind) || kind, { direction: "sendrecv" })
+    );
+    presentationChannels.set(pc, channels);
+  }
 
   pc.onicecandidate = (e) => {
     if (e.candidate) {
@@ -746,6 +813,14 @@ function createPeerConnection(peerId, forceRelay = false, initiator = true) {
   };
 
   pc.ontrack = (e) => {
+    if (isPresentationChannel(pc, e.transceiver)) {
+      const stream = remotePresentations.get(peerId) || new MediaStream();
+      stream.getTracks().filter(t => t.kind === e.track.kind).forEach(t => stream.removeTrack(t));
+      stream.addTrack(e.track);
+      remotePresentations.set(peerId, stream);
+      if (presenter === peerId) displayPresentation();
+      return;
+    }
     if (e.track.kind === "video") {
       remoteVideoTracks.set(peerId, e.track);
       renderCamera(peerId);
@@ -819,18 +894,21 @@ function createPeerConnection(peerId, forceRelay = false, initiator = true) {
 // kurulamamasından kaynaklanır — relay'e zorlamak bunu genelde çözer).
 function handleConnectionTrouble(peerId) {
   const alreadyVoiceConnected = voicePeerNames.has(peerId);
+  const attempted = relayRetried.has(peerId);
   closePeerConnection(peerId);
 
   if (!alreadyVoiceConnected) return;
 
-  if (relayRetried.has(peerId)) {
-    appendMessage({ system: true, text: "Sesli bağlantı kurulamadı (ağ/firewall engeli olabilir)." });
+  if (attempted) {
+    appendMessage({ system: true, text: "Kamera ve ses bağlantısı kurulamadı. Farklı ağlar arasında TURN bağlantısını kontrol edin." });
     return;
   }
   relayRetried.add(peerId);
 
   if (shouldInitiateTo(peerId)) {
     callPeer(peerId, true);
+  } else {
+    sendSignal(peerId, { retry: true });
   }
   // Diğer taraf yeni offer'ı bekleyecek (createPeerConnection offer geldiğinde otomatik kurulur).
 }
@@ -853,6 +931,8 @@ function closePeerConnection(peerId) {
     remoteAudioEls.delete(peerId);
   }
 
+  remotePresentations.delete(peerId);
+  if (presenter === peerId) displayPresentation();
   remoteVideoTracks.delete(peerId);
   renderCamera(peerId);
   mutedPeers.delete(peerId);
@@ -870,7 +950,7 @@ async function callPeer(peerId, forceRelay = false) {
   try {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    sendSignal(peerId, { sdp: pc.localDescription });
+    sendSignal(peerId, { sdp: pc.localDescription, presentationMids: (presentationChannels.get(pc) || []).map(t => t.mid) });
   } catch (err) {
     closePeerConnection(peerId);
   }
@@ -889,12 +969,17 @@ async function handleSignal(fromId, data) {
     renderCamera(fromId);
   }
 
+  if (data.retry && shouldInitiateTo(fromId) && voicePeerNames.has(fromId) && !relayRetried.has(fromId)) {
+    handleConnectionTrouble(fromId);
+    return;
+  }
   let pc = peerConnections.get(fromId);
 
   if (data.sdp) {
     if (!pc) pc = createPeerConnection(fromId, false, false);
 
     try {
+      if (data.sdp.type === "offer") presentationMids.set(pc, new Set(data.presentationMids || []));
       await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
 
       // Remote description gelmeden önce biriken ICE adaylarını şimdi ekle —
@@ -910,7 +995,9 @@ async function handleSignal(fromId, data) {
       if (data.sdp.type === "offer") {
         for (const channel of pc.getTransceivers()) {
           channel.direction = "sendrecv";
-          const track = channel.receiver.track.kind === "video" ? cameraTrack : localStream?.getAudioTracks()[0];
+          const kind = channel.receiver.track.kind;
+          const track = isPresentationChannel(pc, channel) ? outgoingPresentationTrack(kind)
+            : kind === "video" ? cameraTrack : localStream?.getAudioTracks()[0];
           await channel.sender.replaceTrack(track || null);
         }
         const answer = await pc.createAnswer();
@@ -999,9 +1086,90 @@ const cameraTiles = new Map();
 let deviceSession = 0;
 let cameraTrack = null;
 
+const shareTab = document.getElementById("share-tab");
+const shareAudio = document.getElementById("share-audio");
+const sharedVideo = document.getElementById("shared-tab-video");
+const remotePresentations = new Map();
+const presentationChannels = new WeakMap();
+const presentationMids = new WeakMap();
+let presenter = null;
+let capture = null;
+let pickingTab = false;
+
+function isPresentationChannel(pc, channel) {
+  return presentationChannels.get(pc)?.includes(channel) || presentationMids.get(pc)?.has(channel.mid);
+}
+function outgoingPresentationTrack(kind) {
+  if (presenter === myClientId) return capture?.getTracks().find(t => t.kind === kind);
+}
+function displayPresentation() {
+  const own = presenter === myClientId;
+  const stream = own ? capture : remotePresentations.get(presenter);
+  if (sharedVideo.srcObject !== (stream || null)) sharedVideo.srcObject = stream || null;
+  sharedVideo.hidden = !presenter;
+  shareAudio.hidden = !presenter || own;
+  theatre.classList.toggle("presenting", Boolean(presenter));
+  if (stream) sharedVideo.play().catch(() => { if (!own) shareAudio.hidden = false; });
+}
+function setPresenter(id) {
+  if (presenter !== id) {
+    sharedVideo.muted = true;
+    shareAudio.textContent = "Paylaşım sesini aç";
+  }
+  presenter = id;
+  if (id) pageLookup?.abort();
+  if (id !== myClientId && capture) {
+    capture.getTracks().forEach(track => track.stop());
+    capture = null;
+  }
+  for (const pc of peerConnections.values()) {
+    for (const channel of pc.getTransceivers().filter(t => isPresentationChannel(pc, t))) {
+      channel.sender.replaceTrack(outgoingPresentationTrack(channel.receiver.track.kind) || null).catch(() => {});
+    }
+  }
+  shareTab.textContent = id === myClientId ? "Paylaşımı bitir" : "Sekme paylaş";
+  shareTab.disabled = pickingTab || Boolean(id && id !== myClientId);
+  loadVideoBtn.disabled = Boolean(id);
+  displayPresentation();
+}
+function stopPresentation() {
+  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "present", active: false }));
+  setPresenter(null);
+}
+shareAudio.onclick = () => {
+  sharedVideo.muted = !sharedVideo.muted;
+  shareAudio.textContent = sharedVideo.muted ? "Paylaşım sesini aç" : "Paylaşım sesini kapat";
+  sharedVideo.play().catch(() => {});
+};
+shareTab.hidden = !navigator.mediaDevices?.getDisplayMedia || !window.RTCPeerConnection;
+shareTab.onclick = async () => {
+  if (presenter === myClientId) return stopPresentation();
+  if (!roomCode || ws?.readyState !== WebSocket.OPEN || presenter || pickingTab) return;
+  pickingTab = shareTab.disabled = true;
+  const socket = ws;
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: { displaySurface: "browser" }, audio: true, selfBrowserSurface: "exclude", monitorTypeSurfaces: "exclude"
+    });
+    if (socket !== ws || ws.readyState !== WebSocket.OPEN || presenter) {
+      stream.getTracks().forEach(track => track.stop());
+      return;
+    }
+    capture = stream;
+    capture.getVideoTracks()[0].onended = stopPresentation;
+    ws.send(JSON.stringify({ type: "present", active: true }));
+  } catch (error) {
+    if (socket === ws && error.name !== "NotAllowedError") showMediaStatus("Sekme paylaşımı başlatılamadı (" + error.name + ").");
+  } finally {
+    pickingTab = false;
+    shareTab.disabled = Boolean(presenter && presenter !== myClientId);
+  }
+};
+
 function placeCameraStrip() {
   if (currentFullscreenElement() === theatre) document.getElementById("video-wrap").appendChild(cameraStrip);
   else theatre.before(cameraStrip);
+  for (const video of cameraStrip.querySelectorAll("video")) video.play().catch(() => { video.controls = true; });
 }
 document.addEventListener("fullscreenchange", placeCameraStrip);
 document.addEventListener("webkitfullscreenchange", placeCameraStrip);
@@ -1031,12 +1199,15 @@ function renderCamera(id) {
     cameraStrip.appendChild(tile);
   }
   const video = tile.querySelector("video");
-  if (video.srcObject?.getVideoTracks()[0] !== track) video.srcObject = new MediaStream([track]);
+  if (video.srcObject?.getVideoTracks()[0] !== track) {
+    video.srcObject = new MediaStream([track]);
+    video.play().catch(() => { video.controls = true; });
+  }
 }
 
 function replaceOutgoingTrack(kind, track) {
   for (const [id, pc] of peerConnections) {
-    const channel = pc.getTransceivers().find(t => t.receiver.track.kind === kind);
+    const channel = pc.getTransceivers().find(t => !isPresentationChannel(pc, t) && t.receiver.track.kind === kind);
     channel?.sender.replaceTrack(track).catch(() => {
       if (peerConnections.get(id) === pc) appendMessage({ system: true, text: "Medya paylaşımı güncellenemedi. Odaya tekrar katıl." });
     });
@@ -1044,12 +1215,12 @@ function replaceOutgoingTrack(kind, track) {
 }
 
 function updateCamera() {
+  renderCamera(myClientId);
   replaceOutgoingTrack("video", cameraTrack);
   for (const id of peerConnections.keys()) sendSignal(id, {});
   cameraBtn.dataset.state = cameraTrack ? "on" : "off";
   cameraBtn.setAttribute("aria-pressed", String(Boolean(cameraTrack)));
   cameraBtn.textContent = cameraTrack ? "Kamera kapat" : "Kamera aç";
-  renderCamera(myClientId);
 }
 
 function disableCamera() {
@@ -1058,26 +1229,84 @@ function disableCamera() {
   updateCamera();
 }
 
-cameraBtn.addEventListener("click", async () => {
-  if (cameraTrack) return disableCamera();
-  const session = deviceSession;
-  cameraBtn.disabled = true;
+const deviceSelect = document.getElementById("camera-device");
+const qualitySelect = document.getElementById("camera-quality");
+const cameraSize = document.getElementById("camera-size");
+const cameraStatus = document.getElementById("camera-status");
+function showCameraStatus(message) {
+  cameraStatus.textContent = message;
+  cameraStatus.hidden = !message;
+}
+async function refreshDevices() {
+  if (!navigator.mediaDevices?.enumerateDevices) return;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 320 }, height: { ideal: 240 } } });
+    const devices = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput" && d.deviceId);
+    const selected = deviceSelect.value || cameraTrack?.getSettings().deviceId;
+    deviceSelect.replaceChildren(new Option("Varsayılan kamera", ""));
+    for (const [index, device] of devices.entries()) deviceSelect.add(new Option(device.label || "Kamera " + (index + 1), device.deviceId));
+    deviceSelect.value = devices.some(d => d.deviceId === selected) ? selected : "";
+  } catch {}
+}
+document.getElementById("camera-settings").addEventListener("toggle", refreshDevices);
+navigator.mediaDevices?.addEventListener?.("devicechange", refreshDevices);
+cameraSize.oninput = () => cameraStrip.style.setProperty("--camera-size", cameraSize.value + "px");
+deviceSelect.onchange = qualitySelect.onchange = () => { if (cameraTrack) openCamera(); };
+cameraBtn.addEventListener("click", () => {
+  if (cameraTrack) { disableCamera(); showCameraStatus(""); }
+  else openCamera();
+});
+
+async function openCamera() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    showCameraStatus("Kamera için siteyi HTTPS üzerinden, Chrome veya Safari gibi bir tarayıcıda aç.");
+    return;
+  }
+  const session = deviceSession;
+  deviceSelect.disabled = qualitySelect.disabled = cameraBtn.disabled = true;
+  showCameraStatus("Kamera açılıyor. Tarayıcı izin isterse kameraya izin ver.");
+  try {
+    const height = Number(qualitySelect.value);
+    const constraints = { height: { ideal: height }, width: { ideal: Math.round(height * 4 / 3) } };
+    if (deviceSelect.value) constraints.deviceId = { exact: deviceSelect.value };
+    if (cameraTrack && deviceSelect.value === cameraTrack.getSettings().deviceId) {
+      await cameraTrack.applyConstraints({ height: constraints.height, width: constraints.width });
+      if (session === deviceSession) showCameraStatus("");
+      return;
+    }
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({ video: constraints }); }
+    catch (error) {
+      if (!cameraTrack || error.name !== "NotReadableError" || session !== deviceSession) throw error;
+      disableCamera();
+      stream = await navigator.mediaDevices.getUserMedia({ video: constraints });
+    }
     const track = stream.getVideoTracks()[0];
     if (session !== deviceSession) {
       track.stop();
       return;
     }
+    cameraTrack?.stop();
     cameraTrack = track;
-    track.onended = disableCamera;
+    track.onended = () => {
+      if (cameraTrack !== track) return;
+      disableCamera();
+      showCameraStatus("Kamera bağlantısı kesildi. Kamera ayarlarından cihazı seçip tekrar aç.");
+    };
     updateCamera();
-  } catch {
-    if (session === deviceSession) appendMessage({ system: true, text: "Kamera açılamadı. Kamera bağlantısını ve tarayıcının kamera iznini kontrol et." });
+    showCameraStatus("");
+    await refreshDevices();
+  } catch (error) {
+    const messages = {
+      NotAllowedError: "Kamera izni kapalı. Adres çubuğundaki site izinlerinden kameraya izin ver ve cihazının kamera gizlilik ayarını kontrol et.",
+      NotFoundError: "Tarayıcı kamera bulamadı. Cihazı bağla ve Kamera ayarları bölümünden seç.",
+      NotReadableError: "Kamera kullanımda olabilir. Kamerayı kullanan diğer uygulamayı kapatıp tekrar dene.",
+      OverconstrainedError: "Seçilen kamera veya kalite kullanılamıyor. Varsayılan kamerayı ya da daha düşük kaliteyi seç."
+    };
+    if (session === deviceSession) showCameraStatus(messages[error.name] || "Kamera açılamadı (" + error.name + ").");
   } finally {
-    cameraBtn.disabled = false;
+    if (session === deviceSession) deviceSelect.disabled = qualitySelect.disabled = cameraBtn.disabled = false;
   }
-});
+}
 
 async function enableMic() {
   const session = deviceSession;
@@ -1136,8 +1365,7 @@ micBtn.addEventListener("click", () => {
 
 if (!navigator.mediaDevices || !window.RTCPeerConnection) {
   micBtn.disabled = true;
-  cameraBtn.disabled = true;
-  cameraBtn.title = micBtn.title = "Kamera ve mikrofon için HTTPS veya localhost kullan.";
+  micBtn.title = "Kamera ve mikrofon için HTTPS veya localhost kullan.";
 
 }
 

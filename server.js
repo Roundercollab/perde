@@ -9,6 +9,15 @@ const wss = new WebSocket.Server({ server });
 
 app.use(express.static(path.join(__dirname, "public")));
 
+app.get("/api/video-page", require("./resolve-video").resolveVideo);
+
+function playbackSnapshot(room) {
+  if (!room.state) return null;
+  const state = room.state;
+  const elapsed = state.playing ? Math.max(0, Date.now() - state.updatedAt) / 1000 : 0;
+  return { ...state, time: state.time + elapsed * state.rate };
+}
+
 const rooms = new Map();
 const MAX_ROOM_CODE_LEN = 30;
 const MAX_SOURCE_LEN = 2000;
@@ -101,7 +110,11 @@ wss.on("connection", (ws) => {
       send(ws, {
         type: "joined",
         room: code,
-        state: room.state
+        state: playbackSnapshot(room),
+        presenter: room.presenter || null,
+        turn: process.env.TURN_URL && process.env.TURN_USERNAME && process.env.TURN_PASSWORD ? {
+          urls: process.env.TURN_URL.split(","), username: process.env.TURN_USERNAME, credential: process.env.TURN_PASSWORD
+        } : null
       });
 
       broadcast(room, {
@@ -114,8 +127,35 @@ wss.on("connection", (ws) => {
 
     if (!room) return;
 
+    if (message.type === "present") {
+      if (message.active && (!room.presenter || room.presenter === clientId)) {
+        room.presenter = clientId;
+        if (room.state?.playing) {
+          room.state = { ...playbackSnapshot(room), playing: false, updatedAt: Date.now() };
+          broadcast(room, { type: "state", state: room.state });
+        }
+      } else if (!message.active && room.presenter === clientId) {
+        room.presenter = null;
+      }
+      broadcast(room, { type: "presenter", id: room.presenter || null });
+      return;
+    }
+
+    if (message.type === "sync") {
+      if (room.state?.by === clientId && room.state.source === message.source &&
+          typeof message.time === "number" && Number.isFinite(message.time) &&
+          message.playing === room.state.playing && message.rate === room.state.rate) {
+        room.state.time = Math.max(0, message.time);
+        room.state.updatedAt = Date.now();
+      } else if (room.state) {
+        send(ws, { type: "snapshot", state: playbackSnapshot(room) });
+      }
+      return;
+    }
+
     // Video durumu değişti
     if (message.type === "state") {
+      if (room.presenter) return;
       const source = typeof message.source === "string"
         ? message.source.slice(0, MAX_SOURCE_LEN)
         : null;
@@ -246,6 +286,10 @@ wss.on("connection", (ws) => {
     const wasInVoice = !!(info && info.voice);
 
     room.users.delete(ws);
+    if (room.presenter === clientId) {
+      room.presenter = null;
+      broadcast(room, { type: "presenter", id: null });
+    }
 
     broadcast(room, {
       type: "system",

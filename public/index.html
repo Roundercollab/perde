@@ -58,17 +58,29 @@
   <main class="stage-area">
     <div class="video-column">
       <div class="url-bar">
-        <input type="text" id="video-url" aria-label="Video bağlantısı" placeholder="YouTube, Vimeo, HLS veya video bağlantısı">
+        <input type="text" id="video-url" aria-label="Video bağlantısı" placeholder="Video veya videonun bulunduğu sayfanın bağlantısı">
         <button id="load-video">Yükle</button>
+        <button id="share-tab" type="button" title="Videonun açık olduğu sekmeyi odaya paylaş" hidden>Sekme paylaş</button>
       </div>
 
       <p id="media-status" role="status" hidden></p>
+      <details id="camera-settings">
+        <summary>Kamera ayarları</summary>
+        <div class="camera-options">
+          <label>Kamera <select id="camera-device"><option value="">Varsayılan kamera</option></select></label>
+          <label>Görüntü kalitesi <select id="camera-quality"><option value="240">240p</option><option value="480" selected>480p</option><option value="720">720p</option></select></label>
+          <label>Kamera kutusu <input id="camera-size" type="range" min="88" max="320" value="152"></label>
+        </div>
+      </details>
+      <p id="camera-status" role="status" hidden></p>
       <div id="camera-strip" aria-label="Oda kameraları"></div>
       <div class="theatre" id="theatre">
         <div class="video-wrap" id="video-wrap">
           <video id="video-player" controls controlsList="nofullscreen noremoteplayback nopictureinpicture" disablePictureInPicture playsinline></video>
 
+          <video id="shared-tab-video" autoplay playsinline muted hidden></video>
           <div class="player-controls-top">
+            <button type="button" class="seek-btn" id="share-audio" hidden>Paylaşım sesini aç</button>
             <button class="seek-btn" id="seek-back-btn" title="5 saniye geri" aria-label="5 saniye geri">
               <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/></svg>
               <span>5</span>
