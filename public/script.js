@@ -149,7 +149,20 @@ function connectSocket() {
       if (data.turn) RTC_CONFIG.iceServers = [RTC_CONFIG.iceServers[0], data.turn];
       ws.send(JSON.stringify({ type: "voice-join" }));
     }
-    if (data.type === "joined") setPresenter(data.presenter || null);
+    if (data.type === "joined") {
+      setPresenter(data.presenter || null);
+      for (const camera of data.cameras || []) setRemoteCamera(camera.id, camera.name, true);
+      announceCamera();
+    }
+    if (data.type === "camera-state") setRemoteCamera(data.id, data.name, data.active);
+    if (data.type === "camera-relay") setCameraRelay(data.active);
+    if (data.type === "camera-frame" && cameraReceivers.get(data.from)?.subscribed) {
+      const image = cameraTiles.get(data.from)?.querySelector("img");
+      if (image) {
+        image.src = data.jpeg;
+        image.hidden = false;
+      }
+    }
     if (data.type === "presenter") setPresenter(data.id);
     if (data.type === "joined" && data.state) {
       applyState(data.state);
@@ -963,7 +976,7 @@ async function handleSignal(fromId, data) {
     else activeMics.delete(fromId);
     renderVoiceRoster();
   }
-  if (typeof data.camera === "boolean") {
+  if (typeof data.camera === "boolean" && !cameraReceivers.has(fromId)) {
     if (data.camera) visibleCameras.add(fromId);
     else visibleCameras.delete(fromId);
     renderCamera(fromId);
@@ -1041,6 +1054,7 @@ function handleVoiceJoin(id, name) {
 
 function handleVoiceLeave(id) {
   activeMics.delete(id);
+  cameraReceivers.delete(id);
   visibleCameras.delete(id);
   voicePeerNames.delete(id);
   closePeerConnection(id);
@@ -1048,6 +1062,8 @@ function handleVoiceLeave(id) {
 }
 
 function teardownAllVoicePeers() {
+  setCameraRelay(false);
+  for (const id of [...visibleCameras]) setRemoteCamera(id, "", false);
   for (const id of Array.from(peerConnections.keys())) {
     closePeerConnection(id);
   }
@@ -1080,6 +1096,62 @@ function micErrorMessage(err) {
 const cameraBtn = document.getElementById("camera-btn");
 const cameraStrip = document.getElementById("camera-strip");
 const remoteVideoTracks = new Map();
+const cameraReceivers = new Map();
+const relayCanvas = document.createElement("canvas");
+let frameTimer;
+
+function announceCamera() {
+  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "camera-state", active: Boolean(cameraTrack) }));
+}
+
+function setCameraRelay(active) {
+  clearInterval(frameTimer);
+  if (!active || !cameraTrack) return;
+  frameTimer = setInterval(() => {
+    const video = cameraTiles.get(myClientId)?.querySelector("video");
+    if (ws?.readyState !== WebSocket.OPEN || ws.bufferedAmount > 65536 || !video?.videoWidth || video.readyState < 2) return;
+    const scale = Math.min(1, 320 / Math.max(video.videoWidth, video.videoHeight));
+    const width = Math.max(1, Math.round(video.videoWidth * scale));
+    const height = Math.max(1, Math.round(video.videoHeight * scale));
+    if (relayCanvas.width !== width || relayCanvas.height !== height) {
+      relayCanvas.width = width;
+      relayCanvas.height = height;
+    }
+    relayCanvas.getContext("2d").drawImage(video, 0, 0, width, height);
+    const jpeg = relayCanvas.toDataURL("image/jpeg", 0.55);
+    if (jpeg.length <= 65536) ws.send(JSON.stringify({ type: "camera-frame", jpeg }));
+  }, 160);
+}
+
+function setRemoteCamera(id, name, active) {
+  if (active) {
+    visibleCameras.add(id);
+    voicePeerNames.set(id, name);
+    if (!cameraReceivers.has(id)) cameraReceivers.set(id, { progress: 0, lastFrame: performance.now(), subscribed: false });
+  } else {
+    cameraReceivers.delete(id);
+    visibleCameras.delete(id);
+  }
+  renderCamera(id);
+}
+
+setInterval(() => {
+  if (ws?.readyState !== WebSocket.OPEN) return;
+  for (const [id, receiver] of cameraReceivers) {
+    const tile = cameraTiles.get(id);
+    const video = tile?.querySelector("video");
+    const progress = video?.getVideoPlaybackQuality?.().totalVideoFrames ?? video?.currentTime;
+    if (video?.readyState >= 2 && !remoteVideoTracks.get(id)?.muted && progress !== receiver.progress) {
+      receiver.progress = progress;
+      receiver.lastFrame = performance.now();
+    }
+    const stalled = performance.now() - receiver.lastFrame > 3000;
+    if (receiver.subscribed === stalled) continue;
+    receiver.subscribed = stalled;
+    if (!stalled && tile) tile.querySelector("img").hidden = true;
+    ws.send(JSON.stringify({ type: "camera-subscribe", to: id, active: stalled }));
+  }
+}, 750);
 const visibleCameras = new Set();
 const activeMics = new Set();
 const cameraTiles = new Map();
@@ -1178,7 +1250,7 @@ function renderCamera(id) {
   const local = id === myClientId;
   const track = local ? cameraTrack : visibleCameras.has(id) && remoteVideoTracks.get(id);
   let tile = cameraTiles.get(id);
-  if (!track) {
+  if (!track && (local || !visibleCameras.has(id))) {
     if (tile) {
       tile.querySelector("video").srcObject = null;
       tile.remove();
@@ -1194,12 +1266,17 @@ function renderCamera(id) {
     video.playsInline = true;
     const caption = document.createElement("figcaption");
     caption.textContent = local ? "Sen" : voicePeerNames.get(id) || "Misafir";
-    tile.append(video, caption);
+    const image = document.createElement("img");
+    image.alt = "Oda bağlantısıyla iletilen kamera görüntüsü";
+    image.hidden = true;
+    tile.append(video, image, caption);
     cameraTiles.set(id, tile);
     cameraStrip.appendChild(tile);
   }
   const video = tile.querySelector("video");
-  if (video.srcObject?.getVideoTracks()[0] !== track) {
+  if (!track) {
+    video.srcObject = null;
+  } else if (video.srcObject?.getVideoTracks()[0] !== track) {
     video.srcObject = new MediaStream([track]);
     video.play().catch(() => { video.controls = true; });
   }
@@ -1215,6 +1292,8 @@ function replaceOutgoingTrack(kind, track) {
 }
 
 function updateCamera() {
+  announceCamera();
+  if (!cameraTrack) setCameraRelay(false);
   renderCamera(myClientId);
   replaceOutgoingTrack("video", cameraTrack);
   for (const id of peerConnections.keys()) sendSignal(id, {});

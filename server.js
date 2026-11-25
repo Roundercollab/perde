@@ -90,6 +90,7 @@ wss.on("connection", (ws) => {
 
     // Odaya katıl
     if (message.type === "join") {
+      if (room) return;
       const code = String(message.room || "")
         .trim()
         .toUpperCase()
@@ -104,7 +105,10 @@ wss.on("connection", (ws) => {
       room.users.set(ws, {
         id: clientId,
         name,
-        voice: false
+        voice: false,
+        camera: false,
+        viewers: new Set(),
+        lastFrame: 0
       });
 
       send(ws, {
@@ -112,6 +116,7 @@ wss.on("connection", (ws) => {
         room: code,
         state: playbackSnapshot(room),
         presenter: room.presenter || null,
+        cameras: [...room.users.values()].filter(user => user.camera).map(({id, name}) => ({id, name})),
         turn: process.env.TURN_URL && process.env.TURN_USERNAME && process.env.TURN_PASSWORD ? {
           urls: process.env.TURN_URL.split(","), username: process.env.TURN_USERNAME, credential: process.env.TURN_PASSWORD
         } : null
@@ -245,6 +250,40 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    if (message.type === "camera-state") {
+      const user = room.users.get(ws);
+      user.camera = message.active === true;
+      if (!user.camera) user.viewers.clear();
+      broadcast(room, { type: "camera-state", id: clientId, name, active: user.camera }, ws);
+      return;
+    }
+
+    if (message.type === "camera-subscribe") {
+      const owner = findWsByClientId(room, message.to);
+      const user = room.users.get(owner);
+      if (!user?.camera || owner === ws) return;
+      const hadViewers = user.viewers.size > 0;
+      if (message.active === true) user.viewers.add(ws);
+      else user.viewers.delete(ws);
+      if (hadViewers !== (user.viewers.size > 0)) {
+        send(owner, { type: "camera-relay", active: user.viewers.size > 0 });
+      }
+      return;
+    }
+
+    if (message.type === "camera-frame") {
+      const user = room.users.get(ws);
+      const jpeg = message.jpeg;
+      if (!user.camera || !user.viewers.size || Date.now() - user.lastFrame < 100 ||
+          typeof jpeg !== "string" || jpeg.length > 65536 || !jpeg.startsWith("data:image/jpeg;base64,/9j/")) return;
+      user.lastFrame = Date.now();
+      const frame = JSON.stringify({ type: "camera-frame", from: clientId, jpeg });
+      for (const viewer of user.viewers) {
+        if (viewer.readyState === WebSocket.OPEN && viewer.bufferedAmount < 65536) viewer.send(frame);
+      }
+      return;
+    }
+
     // WebRTC offer/answer/ICE — sadece hedeflenen tek bir katılımcıya iletilir
     if (message.type === "signal") {
       const targetId = message.to;
@@ -286,6 +325,10 @@ wss.on("connection", (ws) => {
     const wasInVoice = !!(info && info.voice);
 
     room.users.delete(ws);
+    if (info?.camera) broadcast(room, { type: "camera-state", id: clientId, name, active: false });
+    for (const [owner, user] of room.users) {
+      if (user.viewers.delete(ws) && !user.viewers.size) send(owner, { type: "camera-relay", active: false });
+    }
     if (room.presenter === clientId) {
       room.presenter = null;
       broadcast(room, { type: "presenter", id: null });
