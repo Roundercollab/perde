@@ -61,6 +61,7 @@ joinForm.addEventListener("submit", (e) => {
 // ---------- Odadan çıkış (ana menüye dön) ----------
 
 function leaveRoom() {
+  peerVolumes.clear();
   clearTimeout(reconnectTimer);
 
   cameraLayout.clear();
@@ -599,7 +600,11 @@ chatToggleBtn.addEventListener("click", () => {
 function spawnEmote(emoji) {
   const el = document.createElement("span");
   el.className = "flying-emote";
-  el.textContent = emoji;
+  if (emoji === "sahur") {
+    el.appendChild(emoteBar.querySelector('[data-emoji="sahur"] img').cloneNode());
+  } else {
+    el.textContent = emoji;
+  }
 
   const drift = Math.round((Math.random() - 0.5) * 70); // hafif yatay sapma
   el.style.setProperty("--drift", drift + "px");
@@ -864,7 +869,28 @@ function renderVoiceRoster() {
 
     pill.addEventListener("click", () => togglePeerMute(id));
 
-    voiceRoster.appendChild(pill);
+    const row = document.createElement("div");
+    row.className = "voice-level";
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.min = "0";
+    slider.max = "200";
+    slider.step = "5";
+    slider.value = String(Math.round(100 * (peerVolumes.get(id) ?? 1)));
+    slider.setAttribute("aria-label", name + " için dinleme sesi");
+    const percent = document.createElement("span");
+    const display = () => {
+      percent.textContent = "%" + slider.value;
+      slider.setAttribute("aria-valuetext", percent.textContent);
+    };
+    display();
+    slider.oninput = () => {
+      peerVolumes.set(id, Number(slider.value) / 100);
+      display();
+      updateVoiceOutput(id);
+    };
+    row.append(pill, slider, percent);
+    voiceRoster.appendChild(row);
   }
 }
 
@@ -1007,6 +1033,7 @@ function handleConnectionTrouble(peerId) {
 }
 
 function closePeerConnection(peerId) {
+  disconnectDirectMixer(peerId);
   const pc = peerConnections.get(peerId);
   if (pc) {
     pc.onconnectionstatechange = null;
@@ -1132,6 +1159,7 @@ function handleVoiceJoin(id, name) {
 }
 
 function handleVoiceLeave(id) {
+  peerVolumes.delete(id);
   remoteMic(id, "", false);
   mutedPeers.delete(id);
   activeMics.delete(id);

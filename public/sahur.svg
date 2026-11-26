@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Tung Tung Tung Sahur</title>
+  <g stroke="#422817" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 46l-2 11-6 1q-3 3 3 3h8l2-14m8 0 2 11 6 1q3 3-3 3h-8l-3-14" fill="#b56a32"/>
+    <path d="M16 17Q15 9 28 7q13-2 15 6l1 30q0 8-13 10-13 1-14-6z" fill="#ce8746"/>
+    <ellipse cx="29.5" cy="13" rx="13.3" ry="5.7" transform="rotate(-8 29 13)" fill="#f2bb70"/>
+    <path d="M22 13q5-4 13-2m-14 9 1 6m16 13 1 5m-17 0 1 4" fill="none" stroke="#955829" stroke-width="1.7"/>
+    <path d="M16 29q-8 1-6 10l4 2m30-13q5 4 7 1" fill="none" stroke-width="4"/>
+    <path d="m48 40 3-16 2-16q1-5 6-3 4 1 2 5l-7 16-4 15z" fill="#ebae65"/>
+    <ellipse cx="25" cy="27" rx="5" ry="6" fill="#fff7df"/>
+    <ellipse cx="36" cy="26" rx="4.8" ry="5.8" fill="#fff7df"/>
+    <path d="M26 26v2m9-3v2" stroke="#291b14" stroke-width="3.8"/>
+    <path d="M24 37q7 2 14-3-3 12-11 8z" fill="#532d21"/>
+    <path d="m27 38 8-2" stroke="#fff3c7" stroke-width="2.4"/>
+  </g>
+</svg>

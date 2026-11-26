@@ -478,6 +478,13 @@ body {
 }
 
 .voice-roster[hidden] { display: none; }
+.voice-level { display: flex; align-items: center; gap: 5px; max-width: 100%; }
+.voice-level input { width: 76px; min-width: 36px; accent-color: var(--marquee); }
+.voice-level > span { color: var(--text-mid); font-size: 11px; font-variant-numeric: tabular-nums; }
+.voice-level .voice-peer { min-width: 0; }
+.voice-level .voice-peer span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.emote-bar img { display: block; width: 1.25em; height: 1.25em; }
+.flying-emote img { display: block; width: 1.6em; height: 1.6em; }
 
 .voice-roster .voice-peer {
   display: flex;

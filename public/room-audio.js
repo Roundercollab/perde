@@ -1,11 +1,18 @@
 let soundContext, workletReady, captureSource, captureProcessor;
 let relayWanted = false;
 const voiceRoutes = new Map();
+const peerVolumes = new Map();
+const directMixers = new Map();
 
 function unlockRoomAudio() {
   const Context = window.AudioContext || window.webkitAudioContext;
   if (!Context) return;
-  soundContext ||= new Context();
+  if (!soundContext) {
+    soundContext = new Context();
+    soundContext.addEventListener("statechange", () => {
+      for (const id of remoteAudioEls.keys()) updateVoiceOutput(id);
+    });
+  }
   if (soundContext.state === "suspended") soundContext.resume().catch(() => {});
 }
 joinForm.addEventListener("submit", unlockRoomAudio);
@@ -44,11 +51,40 @@ async function prepareMicRelay(active) {
   }
 }
 
+function disconnectDirectMixer(id) {
+  const mixer = directMixers.get(id);
+  if (!mixer) return;
+  mixer.source.disconnect();
+  mixer.gain.disconnect();
+  directMixers.delete(id);
+}
+
 function updateVoiceOutput(id) {
   const route = voiceRoutes.get(id);
   const audio = remoteAudioEls.get(id);
-  if (audio) audio.muted = mutedPeers.has(id) || Boolean(route?.relay);
-  if (route?.gain) route.gain.gain.value = route.relay && !mutedPeers.has(id) ? 1 : 0;
+  const volume = peerVolumes.get(id) ?? 1;
+  const muted = mutedPeers.has(id);
+  const stream = audio?.srcObject;
+  const mixDirect = stream && volume !== 1 && !route?.relay && !muted && soundContext?.state === "running";
+  let mixer = directMixers.get(id);
+  if (mixer && (!mixDirect || mixer.stream !== stream)) {
+    disconnectDirectMixer(id);
+    mixer = null;
+  }
+  if (mixDirect && !mixer) {
+    const source = soundContext.createMediaStreamSource(stream);
+    const gain = soundContext.createGain();
+    source.connect(gain);
+    gain.connect(soundContext.destination);
+    mixer = {stream, source, gain};
+    directMixers.set(id, mixer);
+  }
+  if (mixer) mixer.gain.gain.value = volume;
+  if (audio) {
+    audio.volume = Math.min(1, volume);
+    audio.muted = muted || Boolean(route?.relay) || Boolean(mixer);
+  }
+  if (route?.gain) route.gain.gain.value = route.relay && !muted ? volume : 0;
 }
 
 function remoteMic(id, name, active) {
@@ -108,6 +144,7 @@ function playRoomAudio(id, pcm) {
   }
   if (!route.gain) {
     route.gain = soundContext.createGain();
+    route.gain.gain.value = peerVolumes.get(id) ?? 1;
     route.gain.connect(soundContext.destination);
   }
   const now = soundContext.currentTime;
