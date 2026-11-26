@@ -29,6 +29,8 @@ function getRoom(code) {
     rooms.set(code, {
       code,
       users: new Map(),
+      playlist: [],
+      nextItem: 1,
       state: null
     });
   }
@@ -107,6 +109,8 @@ wss.on("connection", (ws) => {
         name,
         voice: false,
         camera: false,
+        mic: false,
+        listeners: new Set(),
         viewers: new Set(),
         lastFrame: 0
       });
@@ -115,6 +119,8 @@ wss.on("connection", (ws) => {
         type: "joined",
         room: code,
         state: playbackSnapshot(room),
+        playlist: room.playlist,
+        microphones: [...room.users.values()].filter(user => user.mic).map(({id, name}) => ({id, name})),
         presenter: room.presenter || null,
         cameras: [...room.users.values()].filter(user => user.camera).map(({id, name}) => ({id, name})),
         turn: process.env.TURN_URL && process.env.TURN_USERNAME && process.env.TURN_PASSWORD ? {
@@ -146,8 +152,39 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    if (message.type === "playlist") {
+      let item;
+      if (message.action === "add") {
+        try {
+          const url = new URL(message.source);
+          if (!["http:", "https:"].includes(url.protocol) || url.href.length > MAX_SOURCE_LEN || url.username || url.password) return;
+          if (room.playlist.length >= 100) return send(ws, {type: "system", text: "Oynatma listesi dolu (100 video)."});
+          item = { id: room.nextItem++, source: url.href };
+        } catch { return; }
+        room.playlist.push(item);
+        broadcast(room, {type: "playlist", items: room.playlist});
+        if (room.state || room.presenter) return;
+      } else if (message.action === "remove") {
+        if (room.state?.item === message.id) return;
+        room.playlist = room.playlist.filter(entry => entry.id !== message.id);
+        broadcast(room, {type: "playlist", items: room.playlist});
+        return;
+      } else if (message.action === "play") {
+        item = room.playlist.find(entry => entry.id === message.id);
+      } else if (message.action === "ended") {
+        if (!room.state || room.state.source !== message.source || (room.state.item || null) !== message.id) return;
+        const index = room.playlist.findIndex(entry => entry.id === message.id);
+        item = room.playlist[index + 1];
+      }
+      if (!item || room.presenter) return;
+      room.state = {source: item.source, item: item.id, time: 0, rate: 1, playing: true, updatedAt: Date.now(), by: clientId};
+      broadcast(room, {type: "state", state: room.state});
+      return;
+    }
+
     if (message.type === "sync") {
       if (room.state?.by === clientId && room.state.source === message.source &&
+          (message.item || null) === (room.state.item || null) &&
           typeof message.time === "number" && Number.isFinite(message.time) &&
           message.playing === room.state.playing && message.rate === room.state.rate) {
         room.state.time = Math.max(0, message.time);
@@ -164,9 +201,11 @@ wss.on("connection", (ws) => {
       const source = typeof message.source === "string"
         ? message.source.slice(0, MAX_SOURCE_LEN)
         : null;
+      if ("item" in message && !message.load && (message.item !== (room.state?.item || null) || source !== room.state?.source)) return;
 
       room.state = {
         source,
+        item: message.load ? null : (room.state?.source === source ? room.state.item : null),
         playing: !!message.playing,
         time: Number(message.time) || 0,
         rate: Number(message.rate) || 1,
@@ -250,6 +289,32 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    if (message.type === "mic-state") {
+      const user = room.users.get(ws);
+      user.mic = message.active === true;
+      if (!user.mic) user.listeners.clear();
+      broadcast(room, {type: "mic-state", id: clientId, name, active: user.mic}, ws);
+      return;
+    }
+    if (message.type === "mic-subscribe") {
+      const owner = findWsByClientId(room, message.to);
+      const user = room.users.get(owner);
+      if (!user?.mic || owner === ws) return;
+      const before = user.listeners.size;
+      if (message.active) user.listeners.add(ws);
+      else user.listeners.delete(ws);
+      if (Boolean(before) !== Boolean(user.listeners.size)) send(owner, {type: "mic-relay", active: Boolean(user.listeners.size)});
+      return;
+    }
+    if (message.type === "mic-audio") {
+      const user = room.users.get(ws);
+      if (!user.mic || !user.listeners.size || typeof message.pcm !== "string" || message.pcm.length !== 2136) return;
+      const frame = JSON.stringify({type: "mic-audio", from: clientId, pcm: message.pcm});
+      for (const listener of user.listeners) {
+        if (listener.readyState === WebSocket.OPEN && listener.bufferedAmount < 32768) listener.send(frame);
+      }
+      return;
+    }
     if (message.type === "camera-state") {
       const user = room.users.get(ws);
       user.camera = message.active === true;
@@ -326,7 +391,9 @@ wss.on("connection", (ws) => {
 
     room.users.delete(ws);
     if (info?.camera) broadcast(room, { type: "camera-state", id: clientId, name, active: false });
+    if (info?.mic) broadcast(room, { type: "mic-state", id: clientId, name, active: false });
     for (const [owner, user] of room.users) {
+      if (user.listeners.delete(ws) && !user.listeners.size) send(owner, {type: "mic-relay", active: false});
       if (user.viewers.delete(ws) && !user.viewers.size) send(owner, { type: "camera-relay", active: false });
     }
     if (room.presenter === clientId) {

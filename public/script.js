@@ -63,6 +63,8 @@ joinForm.addEventListener("submit", (e) => {
 function leaveRoom() {
   clearTimeout(reconnectTimer);
 
+  cameraLayout.clear();
+  renderPlaylist([]);
   deviceSession++;
   setPresenter(null);
   deviceSelect.disabled = qualitySelect.disabled = cameraBtn.disabled = false;
@@ -149,7 +151,14 @@ function connectSocket() {
       if (data.turn) RTC_CONFIG.iceServers = [RTC_CONFIG.iceServers[0], data.turn];
       ws.send(JSON.stringify({ type: "voice-join" }));
     }
+    if (data.type === "mic-state") remoteMic(data.id, data.name, data.active);
+    if (data.type === "mic-relay") prepareMicRelay(data.active);
+    if (data.type === "mic-audio") playRoomAudio(data.from, data.pcm);
+    if (data.type === "playlist") renderPlaylist(data.items);
     if (data.type === "joined") {
+      renderPlaylist(data.playlist || []);
+      for (const mic of data.microphones || []) remoteMic(mic.id, mic.name, true);
+      sendRoom({type: "mic-state", active: Boolean(localStream)});
       setPresenter(data.presenter || null);
       for (const camera of data.cameras || []) setRemoteCamera(camera.id, camera.name, true);
       announceCamera();
@@ -221,7 +230,7 @@ function requestPlaybackSync() {
   if (ws?.readyState !== WebSocket.OPEN || !desiredState) return;
   const report = { type: "sync" };
   if (desiredState.by === myClientId && videoPlayer.readyState >= 2 && !videoPlayer.seeking) {
-    Object.assign(report, { source: desiredState.source, time: videoPlayer.currentTime, playing: !videoPlayer.paused, rate: videoPlayer.playbackRate });
+    Object.assign(report, { source: desiredState.source, item: desiredState.item || null, time: videoPlayer.currentTime, playing: !videoPlayer.paused, rate: videoPlayer.playbackRate });
   }
   ws.send(JSON.stringify(report));
 }
@@ -272,13 +281,15 @@ function applyState(state) {
   let source;
   try { source = identifySource(state.source); } catch { return; }
   state = { ...state, updatedAt: Date.now() };
-  if (desiredState?.source === source.url) {
+  const changedItem = desiredState?.item !== state.item;
+  if (desiredState?.source === source.url && (desiredState.item || null) === (state.item || null)) {
     desiredState = state;
     if (videoPlayer.readyState >= 1) syncPlayback();
     return;
   }
   resetPlayer();
   desiredState = { ...state, source: source.url };
+  if (changedItem) renderPlaylist();
   const player = source.tag === "video" ? videoPlayer : document.createElement(source.tag);
   if (player !== videoPlayer) {
     player.id = "video-player";
@@ -360,6 +371,7 @@ function sendState() {
   ws.send(JSON.stringify({
     type: "state",
     source: desiredState.source,
+    item: desiredState.item || null,
     playing: !videoPlayer.paused,
     time: videoPlayer.currentTime,
     rate: videoPlayer.playbackRate
@@ -419,7 +431,11 @@ function bindPlayer(player) {
     sendState();
     if (!isRemoteUpdate) sendAction(`hızı ${videoPlayer.playbackRate}x yaptı`);
   });
-  player.addEventListener("ended", () => { if (player === videoPlayer) sendState(); });
+  player.addEventListener("ended", () => {
+    if (player !== videoPlayer || !desiredState || presenter) return;
+    sendState();
+    sendRoom({type: "playlist", action: "ended", source: desiredState.source, id: desiredState.item || null});
+  });
   player.addEventListener("webkitbeginfullscreen", () => {
     player.webkitExitFullscreen?.();
     goFullscreenOnTheatre();
@@ -441,12 +457,39 @@ function publishSource(url) {
   const state = { source: url, playing: false, time: 0, rate: 1, by: myClientId };
   if (videoPlayer.dataset.failed) resetPlayer();
   applyState(state);
-  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "state", ...state }));
+  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "state", ...state, load: true }));
 }
 
-loadVideoBtn.addEventListener("click", async () => {
-  pageLookup?.abort();
-  sourceChoices = [];
+function sendRoom(message) {
+  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+}
+
+let playlistItems = [];
+function renderPlaylist(items = playlistItems) {
+  playlistItems = items;
+  document.getElementById("queue-count").textContent = items.length;
+  const list = document.getElementById("queue-items");
+  list.replaceChildren();
+  for (const entry of items) {
+    const row = document.createElement("li");
+    const play = document.createElement("button");
+    play.textContent = entry.source;
+    play.title = "Oynat · " + entry.source;
+    play.disabled = Boolean(presenter);
+    play.onclick = () => sendRoom({type: "playlist", action: "play", id: entry.id});
+    const current = desiredState?.item === entry.id;
+    if (current) row.setAttribute("aria-current", "true");
+    const remove = document.createElement("button");
+    remove.textContent = current ? "Oynatılıyor" : "Kaldır";
+    remove.disabled = current;
+    remove.onclick = () => sendRoom({type: "playlist", action: "remove", id: entry.id});
+    row.append(play, remove);
+    list.appendChild(row);
+  }
+}
+
+async function resolveInput(signal) {
+  let choices = [];
   const url = videoUrlInput.value.trim();
   if (!url) return;
   let source;
@@ -455,21 +498,45 @@ loadVideoBtn.addEventListener("click", async () => {
     return;
   }
   if (source.tag === "video" && !/\.(mp4|m4v|webm|ogv|ogg|mov)$/i.test(new URL(source.url).pathname)) {
-    const lookup = pageLookup = new AbortController();
+
     showMediaStatus("Sayfadaki video aranıyor…");
     try {
-      const response = await fetch("/api/video-page?url=" + encodeURIComponent(source.url), { signal: lookup.signal });
+      const response = await fetch("/api/video-page?url=" + encodeURIComponent(source.url), { signal });
       if (response.ok) {
         const { sources } = await response.json();
-        sourceChoices = sources.flatMap(value => {
+        choices = sources.flatMap(value => {
           try { return [identifySource(value).url]; } catch { return []; }
         });
       }
     } catch {}
-    if (lookup.signal.aborted) return;
+    if (signal.aborted) return;
   }
-  publishSource(sourceChoices[0] || source.url);
+  return {url: choices[0] || source.url, choices};
+}
+
+loadVideoBtn.addEventListener("click", async () => {
+  pageLookup?.abort();
+  pageLookup = new AbortController();
+  const result = await resolveInput(pageLookup.signal);
+  if (!result) return;
+  sourceChoices = result.choices;
+  publishSource(result.url);
 });
+
+const addToList = document.getElementById("queue-add");
+addToList.onclick = async () => {
+  const socket = ws;
+  const input = videoUrlInput.value;
+  addToList.disabled = true;
+  try {
+    const result = await resolveInput(AbortSignal.timeout(9000));
+    if (!result || socket !== ws || ws?.readyState !== WebSocket.OPEN) return;
+    sendRoom({type: "playlist", action: "add", source: result.url});
+    if (videoUrlInput.value === input) videoUrlInput.value = "";
+    document.getElementById("playlist").open = true;
+    showMediaStatus("");
+  } finally { addToList.disabled = false; }
+};
 videoUrlInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") loadVideoBtn.click();
 });
@@ -737,22 +804,33 @@ function shouldInitiateTo(peerId) {
   return myClientId < peerId;
 }
 
+const micMode = document.getElementById("mic-mode");
+micMode.value = localStorage.getItem("perde-mic-mode") === "ptt" ? "ptt" : "open";
+micMode.onchange = () => {
+  localStorage.setItem("perde-mic-mode", micMode.value);
+  if (!localStream) return;
+  stopTalking();
+  localStream.getAudioTracks()[0].enabled = micMode.value === "open";
+  setMicState("on");
+};
+
 function setMicState(state) {
   micState = state;
   micBtn.dataset.state = state;
 
   const labels = {
-    off: "Mikrofon",
+    off: "Mikrofonu aç",
     connecting: "Bağlanıyor…",
-    on: "Sesli sohbette",
+    on: micMode.value === "ptt" ? "Bas-konuş etkin" : "Mikrofon açık",
     error: "Mikrofon hatası"
   };
   micLabel.textContent = labels[state] || "Mikrofon";
   micBtn.title = state === "on" ? "Sesli sohbetten çık" : "Sesli sohbete katıl";
 
   const connected = state === "on";
-  pttBtn.hidden = !connected;
-  pttRebindBtn.hidden = !connected;
+  micBtn.setAttribute("aria-pressed", String(connected));
+  micBtn.setAttribute("aria-label", connected ? "Mikrofonu kapat" : "Mikrofonu aç");
+  pttBtn.hidden = pttRebindBtn.hidden = !connected || micMode.value !== "ptt";
   if (!connected) stopTalking();
 }
 
@@ -799,6 +877,7 @@ function togglePeerMute(id) {
     mutedPeers.add(id);
     if (audioEl) audioEl.muted = true;
   }
+  updateVoiceOutput(id);
   renderVoiceRoster();
 }
 
@@ -849,6 +928,7 @@ function createPeerConnection(peerId, forceRelay = false, initiator = true) {
       remoteAudioEls.set(peerId, audioEl);
     }
     audioEl.srcObject = new MediaStream([e.track]);
+    updateVoiceOutput(peerId);
 
     // Bazı tarayıcılar (özellikle Chrome) kullanıcı etkileşimi olmadan
     // programatik olarak eklenen sesi otomatik oynatmayı engelleyebiliyor.
@@ -948,7 +1028,6 @@ function closePeerConnection(peerId) {
   if (presenter === peerId) displayPresentation();
   remoteVideoTracks.delete(peerId);
   renderCamera(peerId);
-  mutedPeers.delete(peerId);
   pendingCandidates.delete(peerId);
   relayRetried.delete(peerId);
 }
@@ -1053,6 +1132,8 @@ function handleVoiceJoin(id, name) {
 }
 
 function handleVoiceLeave(id) {
+  remoteMic(id, "", false);
+  mutedPeers.delete(id);
   activeMics.delete(id);
   cameraReceivers.delete(id);
   visibleCameras.delete(id);
@@ -1062,6 +1143,9 @@ function handleVoiceLeave(id) {
 }
 
 function teardownAllVoicePeers() {
+  prepareMicRelay(false);
+  for (const id of voiceRoutes.keys()) remoteMic(id, "", false);
+  mutedPeers.clear();
   setCameraRelay(false);
   for (const id of [...visibleCameras]) setRemoteCamera(id, "", false);
   for (const id of Array.from(peerConnections.keys())) {
@@ -1202,6 +1286,7 @@ function setPresenter(id) {
   shareTab.textContent = id === myClientId ? "Paylaşımı bitir" : "Sekme paylaş";
   shareTab.disabled = pickingTab || Boolean(id && id !== myClientId);
   loadVideoBtn.disabled = Boolean(id);
+  renderPlaylist();
   displayPresentation();
 }
 function stopPresentation() {
@@ -1246,6 +1331,53 @@ function placeCameraStrip() {
 document.addEventListener("fullscreenchange", placeCameraStrip);
 document.addEventListener("webkitfullscreenchange", placeCameraStrip);
 
+const cameraLayout = new Map();
+function positionCamera(tile, layout) {
+  const width = Math.min(innerWidth, innerHeight * 4 / 3, Math.max(72, layout.width));
+  const left = Math.max(0, Math.min(innerWidth - width, layout.left));
+  const top = Math.max(0, Math.min(innerHeight - width * 0.75, layout.top));
+  tile.classList.add("placed");
+  Object.assign(tile.style, {width: width + "px", left: left + "px", top: top + "px"});
+}
+function restoreCameraPositions() {
+  for (const [id, tile] of cameraTiles) if (cameraLayout.has(id)) positionCamera(tile, cameraLayout.get(id));
+}
+window.addEventListener("resize", restoreCameraPositions);
+document.getElementById("reset-cameras").onclick = () => {
+  cameraLayout.clear();
+  for (const tile of cameraTiles.values()) {
+    tile.classList.remove("placed");
+    tile.style.removeProperty("width");
+    tile.style.removeProperty("left");
+    tile.style.removeProperty("top");
+  }
+};
+
+function cameraHandle(button, tile, id, resize) {
+  let start;
+  function adjust(rect, dx, dy) {
+    const layout = resize
+      ? {left: rect.left, top: rect.top, width: rect.width + (Math.abs(dx) >= Math.abs(dy) ? dx : dy * 4 / 3)}
+      : {left: rect.left + dx, top: rect.top + dy, width: rect.width};
+    cameraLayout.set(id, layout);
+    positionCamera(tile, layout);
+  }
+  button.onpointerdown = event => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    start = {rect: tile.getBoundingClientRect(), x: event.clientX, y: event.clientY};
+    button.setPointerCapture(event.pointerId);
+  };
+  button.onpointermove = event => {
+    if (start) adjust(start.rect, event.clientX - start.x, event.clientY - start.y);
+  };
+  button.onlostpointercapture = () => { start = null; };
+  button.onkeydown = event => {
+    const arrow = {ArrowLeft: [-12,0], ArrowRight: [12,0], ArrowUp: [0,-12], ArrowDown: [0,12]}[event.key];
+    if (arrow) { event.preventDefault(); adjust(tile.getBoundingClientRect(), ...arrow); }
+  };
+}
+
 function renderCamera(id) {
   const local = id === myClientId;
   const track = local ? cameraTrack : visibleCameras.has(id) && remoteVideoTracks.get(id);
@@ -1265,11 +1397,23 @@ function renderCamera(id) {
     video.muted = true;
     video.playsInline = true;
     const caption = document.createElement("figcaption");
-    caption.textContent = local ? "Sen" : voicePeerNames.get(id) || "Misafir";
+    const move = document.createElement("button");
+    move.textContent = local ? "Sen" : voicePeerNames.get(id) || "Misafir";
+    move.title = move.textContent + " · Kamerayı sürükle veya ok tuşlarıyla taşı";
+    move.setAttribute("aria-label", move.title);
+    caption.appendChild(move);
+    const resize = document.createElement("button");
+    resize.className = "camera-resize";
+    resize.textContent = "⤡";
+    resize.title = "Kamera boyutunu değiştir";
+    resize.setAttribute("aria-label", resize.title);
+    cameraHandle(move, tile, id, false);
+    cameraHandle(resize, tile, id, true);
     const image = document.createElement("img");
     image.alt = "Oda bağlantısıyla iletilen kamera görüntüsü";
     image.hidden = true;
-    tile.append(video, image, caption);
+    tile.append(video, image, caption, resize);
+    if (cameraLayout.has(id)) positionCamera(tile, cameraLayout.get(id));
     cameraTiles.set(id, tile);
     cameraStrip.appendChild(tile);
   }
@@ -1406,21 +1550,21 @@ async function enableMic() {
     return;
   }
 
-  // Sesli sohbete katılıyoruz ama bas-konuş tuşuna/basılı tutma butonuna
-  // basılana kadar mikrofon sessiz (track devre dışı) — bağlantı hazır
-  // bekliyor, konuşmaya başladığımız an track'i etkinleştiriyoruz.
-  localStream.getTracks().forEach((t) => { t.enabled = false; });
+  localStream.getAudioTracks()[0].enabled = micMode.value === "open";
   isTalking = false;
 
   replaceOutgoingTrack("audio", localStream.getAudioTracks()[0]);
   localStream.getAudioTracks()[0].onended = disableMic;
   setMicState("on");
+  sendRoom({type: "mic-state", active: true});
   for (const id of peerConnections.keys()) sendSignal(id, {});
-  appendMessage({ system: true, text: `Sesli sohbete bağlandın. Konuşmak için "${friendlyKeyName(pttKey)}" tuşunu veya bas-konuş düğmesini basılı tut.` });
+  appendMessage({ system: true, text: micMode.value === "open" ? "Mikrofon açık. Konuşman odadakilere iletiliyor." : `Sesli sohbete bağlandın. Konuşmak için "${friendlyKeyName(pttKey)}" tuşunu veya bas-konuş düğmesini basılı tut.` });
 
 }
 
 function disableMic() {
+  prepareMicRelay(false);
+  sendRoom({type: "mic-state", active: false});
   stopTalking();
 
   if (localStream) {
@@ -1442,7 +1586,7 @@ micBtn.addEventListener("click", () => {
   }
 });
 
-if (!navigator.mediaDevices || !window.RTCPeerConnection) {
+if (!navigator.mediaDevices?.getUserMedia) {
   micBtn.disabled = true;
   micBtn.title = "Kamera ve mikrofon için HTTPS veya localhost kullan.";
 
@@ -1469,7 +1613,7 @@ function renderPttKeyLabel() {
 renderPttKeyLabel();
 
 function startTalking() {
-  if (!localStream || micState !== "on" || isTalking) return;
+  if (!localStream || micMode.value !== "ptt" || micState !== "on" || isTalking) return;
   isTalking = true;
   localStream.getTracks().forEach((t) => { t.enabled = true; });
   micBtn.dataset.talking = "true";
@@ -1493,7 +1637,7 @@ function stopTalking() {
 function isTypingTarget(el) {
   if (!el) return false;
   const tag = el.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
 }
 
 // Basılı tutma: bas-konuş butonuna fare/dokunmatikle basılı tutmak
@@ -1510,7 +1654,7 @@ pttBtn.addEventListener("pointerdown", (e) => {
 document.addEventListener("keydown", (e) => {
   if (isRebindingPtt) return;
 
-  if (e.code === pttKey && !e.repeat && !isTypingTarget(document.activeElement)) {
+  if (micMode.value === "ptt" && micState === "on" && e.code === pttKey && !e.repeat && !isTypingTarget(document.activeElement)) {
     e.preventDefault();
     startTalking();
   }

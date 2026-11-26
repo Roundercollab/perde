@@ -63,6 +63,7 @@ body {
 
 .voice-controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
 }
@@ -766,3 +767,20 @@ body {
   .url-bar { flex-wrap: wrap; }
   .url-bar input { flex-basis: 100%; }
 }
+
+#playlist { color: var(--text-mid); margin: .65rem 0; font-size: .9rem; }
+#playlist summary { cursor: pointer; width: fit-content; }
+#queue-count { color: var(--marquee); padding-inline: .3rem; }
+#queue-items { max-height: 12rem; overflow: auto; padding-left: 2rem; }
+#queue-items:empty { margin: 0; }
+#queue-items li { padding: .25rem 0; }
+#queue-items button, #reset-cameras, #mic-mode { background: var(--panel); color: var(--text-hi); border: 1px solid var(--line); border-radius: .4rem; padding: .35rem .55rem; }
+#queue-items button:first-child { max-width: calc(100% - 7rem); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; margin-right: .5rem; }
+#queue-items li[aria-current] button:first-child { color: var(--marquee); }
+#camera-strip figure.placed { position: fixed; z-index: 25; margin: 0; }
+#camera-strip figure { pointer-events: auto; }
+#camera-strip figcaption { padding: 0; }
+#camera-strip figcaption button, #camera-strip .camera-resize { color: white; border: 0; touch-action: none; user-select: none; padding: 5px 8px; font-size: 12px; }
+#camera-strip figcaption button { background: transparent; cursor: move; }
+#camera-strip .camera-resize { position: absolute; right: 3px; bottom: 3px; border-radius: 5px; background: #16141ac9; cursor: nwse-resize; }
+.video-wrap > #camera-strip { z-index: 25; }

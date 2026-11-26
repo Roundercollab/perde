@@ -17,6 +17,7 @@
       <span class="room-pill" id="room-pill" hidden>Oda <strong id="room-pill-code">—</strong></span>
 
       <div class="voice-controls" id="voice-controls">
+        <select id="mic-mode" aria-label="Mikrofon modu"><option value="open">Açık mikrofon</option><option value="ptt">Bas-konuş</option></select>
         <button class="mic-btn" id="mic-btn" data-state="off" title="Sesli sohbete katıl" aria-label="Sesli sohbete katıl">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
@@ -24,7 +25,7 @@
             <line x1="12" y1="19" x2="12" y2="23"/>
             <line x1="8" y1="23" x2="16" y2="23"/>
           </svg>
-          <span class="mic-label">Mikrofon</span>
+          <span class="mic-label">Mikrofonu aç</span>
         </button>
 
         <button class="mic-btn" id="camera-btn" type="button" aria-pressed="false">Kamera aç</button>
@@ -60,10 +61,12 @@
       <div class="url-bar">
         <input type="text" id="video-url" aria-label="Video bağlantısı" placeholder="Video veya videonun bulunduğu sayfanın bağlantısı">
         <button id="load-video">Yükle</button>
+        <button id="queue-add" type="button">Listeye ekle</button>
         <button id="share-tab" type="button" title="Videonun açık olduğu sekmeyi odaya paylaş" hidden>Sekme paylaş</button>
       </div>
 
       <p id="media-status" role="status" hidden></p>
+      <details id="playlist"><summary>Oynatma listesi <span id="queue-count">0</span></summary><ol id="queue-items"></ol></details>
       <details id="camera-settings">
         <summary>Kamera ayarları</summary>
         <p>Doğrudan bağlantı kesilirse açık kameranın düşük çözünürlüklü görüntüsü oda sunucusu üzerinden iletilir.</p>
@@ -71,6 +74,7 @@
           <label>Kamera <select id="camera-device"><option value="">Varsayılan kamera</option></select></label>
           <label>Görüntü kalitesi <select id="camera-quality"><option value="240">240p</option><option value="480" selected>480p</option><option value="720">720p</option></select></label>
           <label>Kamera kutusu <input id="camera-size" type="range" min="88" max="320" value="152"></label>
+          <button type="button" id="reset-cameras">Kamera yerleşimini sıfırla</button>
         </div>
       </details>
       <p id="camera-status" role="status" hidden></p>
@@ -175,5 +179,6 @@
   </div>
 
   <script src="script.js"></script>
+  <script src="room-audio.js"></script>
 </body>
 </html>
