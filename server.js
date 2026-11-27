@@ -164,6 +164,12 @@ wss.on("connection", (ws) => {
         room.playlist.push(item);
         broadcast(room, {type: "playlist", items: room.playlist});
         if (room.state || room.presenter) return;
+      } else if (message.action === "rename") {
+        const entry = room.playlist.find(video => video.id === message.id);
+        if (!entry || typeof message.title !== "string") return;
+        entry.title = message.title.trim().slice(0, 100);
+        broadcast(room, {type: "playlist", items: room.playlist});
+        return;
       } else if (message.action === "remove") {
         if (room.state?.item === message.id) return;
         room.playlist = room.playlist.filter(entry => entry.id !== message.id);

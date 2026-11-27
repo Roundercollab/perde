@@ -18,6 +18,7 @@
 
       <div class="voice-controls" id="voice-controls">
         <select id="mic-mode" aria-label="Mikrofon modu"><option value="open">Açık mikrofon</option><option value="ptt">Bas-konuş</option></select>
+        <label class="noise-option"><input type="checkbox" id="mic-noise" checked> Gürültü azaltma</label>
         <button class="mic-btn" id="mic-btn" data-state="off" title="Sesli sohbete katıl" aria-label="Sesli sohbete katıl">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
@@ -67,6 +68,11 @@
 
       <p id="media-status" role="status" hidden></p>
       <details id="playlist"><summary>Oynatma listesi <span id="queue-count">0</span></summary><ol id="queue-items"></ol></details>
+      <dialog id="rename-video" aria-labelledby="rename-label"><form method="dialog">
+        <label id="rename-label" for="video-name">Video adı</label>
+        <input id="video-name" type="text" maxlength="100" autocomplete="off">
+        <div><button value="cancel" type="button" id="cancel-name">Vazgeç</button> <button value="save">Kaydet</button></div>
+      </form></dialog>
       <details id="camera-settings">
         <summary>Kamera ayarları</summary>
         <p>Doğrudan bağlantı kesilirse açık kameranın düşük çözünürlüklü görüntüsü oda sunucusu üzerinden iletilir.</p>
@@ -153,6 +159,17 @@
             <button type="button" data-emoji="🦤" title="Dodo">🦤</button>
             <button type="button" data-emoji="🪩" title="Disko topu">🪩</button>
             <button type="button" data-emoji="🦑" title="Kalamar">🦑</button>
+            <!-- Original by @noxaasht: https://commons.wikimedia.org/wiki/File:Tung_tung_tung_sahur.webp -->
+            <button type="button" data-emoji="sahur-og" title="Tung Tung Tung Sahur · Orijinal" aria-label="Orijinal Sahur"><span class="sahur-photo"></span></button>
+            <button type="button" data-emoji="sahur-yk" title="Sahur · Yakın bakış" aria-label="Sahur yakın bakış"><span class="sahur-photo close-up"></span></button>
+            <button type="button" data-emoji="🦖" title="Dinozor">🦖</button>
+            <button type="button" data-emoji="👹" title="Dev">👹</button>
+            <button type="button" data-emoji="🧌" title="Trol">🧌</button>
+            <button type="button" data-emoji="🪿" title="Kaz">🪿</button>
+            <button type="button" data-emoji="🤿" title="Dalgıç">🤿</button>
+            <button type="button" data-emoji="🫨" title="Sarsıldım">🫨</button>
+            <button type="button" data-emoji="🦥" title="Tembel hayvan">🦥</button>
+            <button type="button" data-emoji="🪅" title="Pinyata">🪅</button>
           </div>
 
           <div class="chat-input-row">

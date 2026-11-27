@@ -485,6 +485,16 @@ body {
 .voice-level .voice-peer span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .emote-bar img { display: block; width: 1.25em; height: 1.25em; }
 .flying-emote img { display: block; width: 1.6em; height: 1.6em; }
+.sahur-photo { display: block; width: 1.5em; height: 1.5em; background: center 34% / cover url("sahur-original.webp"); border-radius: 22%; }
+.sahur-photo.close-up { background-size: 255%; background-position: 56% 13%; border-radius: 50%; }
+.flying-emote .sahur-photo { width: 1.9em; height: 1.9em; }
+.noise-option { display: inline-flex; align-items: center; gap: .25rem; font-size: .8rem; }
+#rename-video { color: var(--text-hi); background: var(--panel); border: 1px solid var(--line); border-radius: .6rem; }
+#rename-video::backdrop { background: #0009; }
+#rename-video form { display: grid; gap: .7rem; }
+#rename-video input { font: inherit; width: min(65vw, 25rem); }
+#rename-video form div { text-align: right; }
+#queue-items li button:first-child { max-width: calc(100% - 10rem); }
 
 .voice-roster .voice-peer {
   display: flex;

@@ -61,6 +61,7 @@ joinForm.addEventListener("submit", (e) => {
 // ---------- Odadan çıkış (ana menüye dön) ----------
 
 function leaveRoom() {
+  if (renameVideo.open) renameVideo.close();
   peerVolumes.clear();
   clearTimeout(reconnectTimer);
 
@@ -466,6 +467,15 @@ function sendRoom(message) {
 }
 
 let playlistItems = [];
+const renameVideo = document.getElementById("rename-video");
+const videoName = document.getElementById("video-name");
+let namingEntry;
+document.getElementById("cancel-name").onclick = () => renameVideo.close();
+renameVideo.querySelector("form").onsubmit = event => {
+  event.preventDefault();
+  if (namingEntry?.socket === ws) sendRoom({type: "playlist", action: "rename", id: namingEntry.id, title: videoName.value});
+  renameVideo.close();
+};
 function renderPlaylist(items = playlistItems) {
   playlistItems = items;
   document.getElementById("queue-count").textContent = items.length;
@@ -474,7 +484,7 @@ function renderPlaylist(items = playlistItems) {
   for (const entry of items) {
     const row = document.createElement("li");
     const play = document.createElement("button");
-    play.textContent = entry.source;
+    play.textContent = entry.title || entry.source;
     play.title = "Oynat · " + entry.source;
     play.disabled = Boolean(presenter);
     play.onclick = () => sendRoom({type: "playlist", action: "play", id: entry.id});
@@ -484,7 +494,15 @@ function renderPlaylist(items = playlistItems) {
     remove.textContent = current ? "Oynatılıyor" : "Kaldır";
     remove.disabled = current;
     remove.onclick = () => sendRoom({type: "playlist", action: "remove", id: entry.id});
-    row.append(play, remove);
+    const rename = document.createElement("button");
+    rename.textContent = "Ad ver";
+    rename.onclick = () => {
+      namingEntry = {id: entry.id, socket: ws};
+      videoName.value = entry.title || "";
+      renameVideo.showModal();
+      videoName.select();
+    };
+    row.append(play, rename, remove);
     list.appendChild(row);
   }
 }
@@ -602,6 +620,8 @@ function spawnEmote(emoji) {
   el.className = "flying-emote";
   if (emoji === "sahur") {
     el.appendChild(emoteBar.querySelector('[data-emoji="sahur"] img').cloneNode());
+  } else if (emoji === "sahur-og" || emoji === "sahur-yk") {
+    el.appendChild(emoteBar.querySelector('[data-emoji="' + emoji + '"] span').cloneNode());
   } else {
     el.textContent = emoji;
   }
@@ -1037,6 +1057,8 @@ function closePeerConnection(peerId) {
   const pc = peerConnections.get(peerId);
   if (pc) {
     pc.onconnectionstatechange = null;
+    pc.ontrack = null;
+    pc.onicecandidate = null;
     pc.close();
     peerConnections.delete(peerId);
   }
@@ -1069,9 +1091,9 @@ async function callPeer(peerId, forceRelay = false) {
   try {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    sendSignal(peerId, { sdp: pc.localDescription, presentationMids: (presentationChannels.get(pc) || []).map(t => t.mid) });
+    if (peerConnections.get(peerId) === pc) sendSignal(peerId, { sdp: pc.localDescription, presentationMids: (presentationChannels.get(pc) || []).map(t => t.mid) });
   } catch (err) {
-    closePeerConnection(peerId);
+    if (peerConnections.get(peerId) === pc) closePeerConnection(peerId);
   }
 }
 
@@ -1100,6 +1122,7 @@ async function handleSignal(fromId, data) {
     try {
       if (data.sdp.type === "offer") presentationMids.set(pc, new Set(data.presentationMids || []));
       await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+      if (peerConnections.get(fromId) !== pc) return;
 
       // Remote description gelmeden önce biriken ICE adaylarını şimdi ekle —
       // aksi halde sessizce yok sayılıp bağlantı hiç kurulamayabiliyordu.
@@ -1121,10 +1144,10 @@ async function handleSignal(fromId, data) {
         }
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        sendSignal(fromId, { sdp: pc.localDescription });
+        if (peerConnections.get(fromId) === pc) sendSignal(fromId, { sdp: pc.localDescription });
       }
     } catch (err) {
-      closePeerConnection(fromId);
+      if (peerConnections.get(fromId) === pc) closePeerConnection(fromId);
     }
     return;
   }
@@ -1230,7 +1253,8 @@ function setCameraRelay(active) {
       relayCanvas.height = height;
     }
     relayCanvas.getContext("2d").drawImage(video, 0, 0, width, height);
-    const jpeg = relayCanvas.toDataURL("image/jpeg", 0.55);
+    let jpeg = relayCanvas.toDataURL("image/jpeg", 0.55);
+    if (jpeg.length > 65536) jpeg = relayCanvas.toDataURL("image/jpeg", 0.30);
     if (jpeg.length <= 65536) ws.send(JSON.stringify({ type: "camera-frame", jpeg }));
   }, 160);
 }
@@ -1239,7 +1263,7 @@ function setRemoteCamera(id, name, active) {
   if (active) {
     visibleCameras.add(id);
     voicePeerNames.set(id, name);
-    if (!cameraReceivers.has(id)) cameraReceivers.set(id, { progress: 0, lastFrame: performance.now(), subscribed: false });
+    if (!cameraReceivers.has(id)) cameraReceivers.set(id, { progress: 0, lastFrame: performance.now(), steady: 0, subscribed: false });
   } else {
     cameraReceivers.delete(id);
     visibleCameras.delete(id);
@@ -1256,9 +1280,11 @@ setInterval(() => {
     if (video?.readyState >= 2 && !remoteVideoTracks.get(id)?.muted && progress !== receiver.progress) {
       receiver.progress = progress;
       receiver.lastFrame = performance.now();
-    }
+      receiver.steady++;
+    } else receiver.steady = 0;
     const stalled = performance.now() - receiver.lastFrame > 3000;
     if (receiver.subscribed === stalled) continue;
+    if (!stalled && receiver.steady < 2) continue;
     receiver.subscribed = stalled;
     if (!stalled && tile) tile.querySelector("img").hidden = true;
     ws.send(JSON.stringify({ type: "camera-subscribe", to: id, active: stalled }));
@@ -1358,6 +1384,13 @@ function placeCameraStrip() {
 }
 document.addEventListener("fullscreenchange", placeCameraStrip);
 document.addEventListener("webkitfullscreenchange", placeCameraStrip);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden || !roomCode) return;
+  for (const tile of cameraTiles.values()) {
+    const preview = tile.querySelector("video");
+    if (preview.srcObject && preview.paused) preview.play().catch(() => { preview.controls = true; });
+  }
+});
 
 const cameraLayout = new Map();
 function positionCamera(tile, layout) {
@@ -1559,24 +1592,66 @@ async function openCamera() {
   }
 }
 
+const noiseOption = document.getElementById("mic-noise");
+const supportsNoise = Boolean(navigator.mediaDevices?.getSupportedConstraints?.().noiseSuppression);
+noiseOption.checked = supportsNoise && localStorage.getItem("perde-noise") !== "off";
+noiseOption.disabled = !supportsNoise;
+if (!supportsNoise) noiseOption.parentElement.title = "Bu tarayıcı mikrofon gürültü azaltma ayarı sunmuyor.";
+noiseOption.onchange = async () => {
+  const wanted = noiseOption.checked;
+  const track = localStream?.getAudioTracks()[0];
+  noiseOption.disabled = true;
+  try {
+    if (track) {
+      const constraints = {...track.getConstraints(), noiseSuppression: {exact: wanted}};
+      try { await track.applyConstraints(constraints); } catch (error) {
+        if (track.getSettings().noiseSuppression === undefined) throw error;
+      }
+      if (localStream?.getAudioTracks()[0] !== track) return;
+      if (track.getSettings().noiseSuppression !== wanted) {
+        // Some audio drivers only change processing when opening a new capture.
+        const stream = await navigator.mediaDevices.getUserMedia({audio: constraints});
+        const next = stream.getAudioTracks()[0];
+        if (localStream?.getAudioTracks()[0] !== track) { next.stop(); return; }
+        if (next.getSettings().noiseSuppression !== wanted) { next.stop(); throw Error(); }
+        next.enabled = track.enabled;
+        next.onended = disableMic;
+        localStream = stream;
+        disconnectCapture();
+        replaceOutgoingTrack("audio", next);
+        if (relayWanted) prepareMicRelay(true);
+        track.stop();
+      }
+    }
+    localStorage.setItem("perde-noise", wanted ? "on" : "off");
+  } catch {
+    noiseOption.checked = track?.getSettings().noiseSuppression ?? !wanted;
+    appendMessage({system: true, text: "Bu mikrofon seçilen gürültü azaltma ayarını uygulayamadı."});
+  } finally { noiseOption.disabled = !supportsNoise; }
+};
+
 async function enableMic() {
   const session = deviceSession;
   setMicState("connecting");
 
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    noiseOption.disabled = true;
+    const audio = supportsNoise ? {noiseSuppression: {ideal: noiseOption.checked}} : true;
+    const stream = await navigator.mediaDevices.getUserMedia({ audio });
     if (session !== deviceSession) {
       stream.getTracks().forEach(track => track.stop());
       return;
     }
     localStream = stream;
+    const applied = stream.getAudioTracks()[0].getSettings().noiseSuppression;
+    if (supportsNoise && typeof applied === "boolean") noiseOption.checked = applied;
   } catch (err) {
     if (session !== deviceSession) return;
     setMicState("error");
     appendMessage({ system: true, text: micErrorMessage(err) });
 
     return;
-  }
+  } finally { if (session === deviceSession) noiseOption.disabled = !supportsNoise; }
 
   localStream.getAudioTracks()[0].enabled = micMode.value === "open";
   isTalking = false;
@@ -1591,6 +1666,7 @@ async function enableMic() {
 }
 
 function disableMic() {
+  noiseOption.disabled = !supportsNoise;
   prepareMicRelay(false);
   sendRoom({type: "mic-state", active: false});
   stopTalking();
